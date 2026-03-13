@@ -1,558 +1,450 @@
-// PiBot WebUI - Main Application (Compiled from TypeScript)
-"use strict";
+const { createApp, ref, reactive, computed, nextTick, onMounted, watch } = Vue;
 
-class PiBot {
-    constructor() {
-        this.ws = null;
-        this.messages = [];
-        this.currentProvider = 'openai';
-        this.reconnectAttempts = 0;
-        this.maxReconnectAttempts = 5;
-        this.messageIdCounter = 0;
-        this.pendingCommands = new Map();
-        this.currentPath = '';
-        this.baseDirectory = '';
-        this.init();
-    }
+createApp({
+    setup() {
+        // ── Navigation ──────────────────────────────────────────────────
+        const currentView = ref('chat');
 
-    init() {
-        this.setupWebSocket();
-        this.setupEventListeners();
-        this.loadConfig();
-        this.loadFiles();
-    }
+        // ── WebSocket ────────────────────────────────────────────────────
+        const wsConnected = ref(false);
+        let ws = null;
+        let reconnectAttempts = 0;
+        const maxReconnectAttempts = 5;
+        let messageIdCounter = 0;
 
-    setupWebSocket() {
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${protocol}//${window.location.host}/api/ws`;
-        
-        this.ws = new WebSocket(wsUrl);
-        
-        this.ws.onopen = () => {
-            this.updateConnectionStatus(true);
-            this.reconnectAttempts = 0;
-        };
-        
-        this.ws.onclose = () => {
-            this.updateConnectionStatus(false);
-            this.attemptReconnect();
-        };
-        
-        this.ws.onerror = (error) => {
-            console.error('WebSocket error:', error);
-        };
-        
-        this.ws.onmessage = (event) => {
-            this.handleWSMessage(JSON.parse(event.data));
-        };
-    }
+        function setupWebSocket() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/api/ws`;
+            ws = new WebSocket(wsUrl);
 
-    attemptReconnect() {
-        if (this.reconnectAttempts < this.maxReconnectAttempts) {
-            this.reconnectAttempts++;
-            const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
-            setTimeout(() => this.setupWebSocket(), delay);
-        }
-    }
-
-    updateConnectionStatus(connected) {
-        const statusEl = document.getElementById('connection-status');
-        const dotEl = document.querySelector('.status-dot');
-        
-        if (statusEl && dotEl) {
-            statusEl.textContent = connected ? 'Connected' : 'Disconnected';
-            dotEl.classList.toggle('connected', connected);
-        }
-    }
-
-    handleWSMessage(msg) {
-        switch (msg.type) {
-            case 'stream':
-                this.handleStreamChunk(msg.id, msg.payload.content);
-                break;
-            case 'stream_end':
-                this.handleStreamEnd(msg.id);
-                break;
-            case 'exec_result':
-                this.handleExecResult(msg.payload);
-                break;
-            case 'pending':
-                this.handlePendingCommand(msg.payload);
-                break;
-            case 'error':
-                this.showError(msg.payload.error);
-                break;
-        }
-    }
-
-    handleStreamChunk(id, content) {
-        const messageEl = document.querySelector(`[data-message-id="${id}"] .message-text`);
-        if (messageEl) {
-            messageEl.textContent += content;
-        }
-    }
-
-    handleStreamEnd(id) {
-        const loadingEl = document.querySelector(`[data-message-id="${id}"] .loading-dots`);
-        if (loadingEl) {
-            loadingEl.remove();
-        }
-    }
-
-    handleExecResult(result) {
-        this.addTerminalOutput(result);
-    }
-
-    handlePendingCommand(result) {
-        this.pendingCommands.set(result.pending_id, result);
-        this.showPendingModal(result);
-    }
-
-    setupEventListeners() {
-        // Navigation
-        document.querySelectorAll('.nav-item[data-view]').forEach(item => {
-            item.addEventListener('click', (e) => {
-                e.preventDefault();
-                const view = e.currentTarget.dataset.view;
-                if (view) this.switchView(view);
-            });
-        });
-
-        // Chat form
-        const chatForm = document.getElementById('chat-form');
-        if (chatForm) {
-            chatForm.addEventListener('submit', (e) => {
-                e.preventDefault();
-                this.sendChatMessage();
-            });
-        }
-
-        // Auto-resize textarea
-        const chatInput = document.getElementById('chat-input');
-        if (chatInput) {
-            chatInput.addEventListener('input', () => {
-                chatInput.style.height = 'auto';
-                chatInput.style.height = Math.min(chatInput.scrollHeight, 150) + 'px';
-            });
-
-            // Enter to send (Shift+Enter for newline)
-            chatInput.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    this.sendChatMessage();
-                }
-            });
-        }
-
-        // Quick actions
-        document.querySelectorAll('.quick-action').forEach(btn => {
-            btn.addEventListener('click', () => {
-                const prompt = btn.dataset.prompt;
-                const chatInput = document.getElementById('chat-input');
-                if (prompt && chatInput) {
-                    chatInput.value = prompt;
-                    this.sendChatMessage();
-                }
-            });
-        });
-
-        // Provider select
-        const providerSelect = document.getElementById('provider');
-        if (providerSelect) {
-            providerSelect.addEventListener('change', () => {
-                this.currentProvider = providerSelect.value;
-            });
-        }
-
-        // Terminal form
-        const terminalForm = document.getElementById('terminal-form');
-        if (terminalForm) {
-            terminalForm.addEventListener('submit', (e) => {
-                e.preventDefault();
-                this.executeCommand();
-            });
-        }
-
-        // Clear terminal
-        const clearTerminal = document.getElementById('clear-terminal');
-        if (clearTerminal) {
-            clearTerminal.addEventListener('click', () => {
-                const output = document.getElementById('terminal-output');
-                if (output) output.innerHTML = '';
-            });
-        }
-
-        // File refresh
-        const refreshFiles = document.getElementById('refresh-files');
-        if (refreshFiles) {
-            refreshFiles.addEventListener('click', () => {
-                this.loadFiles();
-            });
-        }
-
-        // Modal handlers
-        const confirmCommand = document.getElementById('confirm-command');
-        if (confirmCommand) {
-            confirmCommand.addEventListener('click', () => {
-                this.confirmPendingCommand();
-            });
-        }
-
-        const cancelCommand = document.getElementById('cancel-command');
-        if (cancelCommand) {
-            cancelCommand.addEventListener('click', () => {
-                this.cancelPendingCommand();
-            });
-        }
-    }
-
-    switchView(viewName) {
-        // Update nav
-        document.querySelectorAll('.nav-item').forEach(item => {
-            item.classList.toggle('active', item.getAttribute('data-view') === viewName);
-        });
-
-        // Update views
-        document.querySelectorAll('.view').forEach(view => {
-            view.classList.toggle('active', view.id === `${viewName}-view`);
-        });
-    }
-
-    async loadConfig() {
-        try {
-            const response = await fetch('/api/config');
-            const config = await response.json();
-            
-            this.currentProvider = config.default_provider;
-            this.baseDirectory = config.base_directory;
-            
-            const providerSelect = document.getElementById('provider');
-            if (providerSelect) {
-                providerSelect.value = this.currentProvider;
-            }
-        } catch (error) {
-            console.error('Failed to load config:', error);
-        }
-    }
-
-    sendChatMessage() {
-        const input = document.getElementById('chat-input');
-        const content = input.value.trim();
-        
-        if (!content || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-
-        // Hide welcome message
-        const welcome = document.querySelector('.welcome-message');
-        if (welcome) welcome.remove();
-
-        // Add user message
-        this.addMessage('user', content);
-        this.messages.push({ role: 'user', content });
-
-        // Clear input
-        input.value = '';
-        input.style.height = 'auto';
-
-        // Generate message ID
-        const messageId = `msg-${++this.messageIdCounter}`;
-
-        // Add assistant message placeholder
-        this.addMessage('assistant', '', messageId);
-
-        // Send via WebSocket
-        const wsMessage = {
-            type: 'chat',
-            id: messageId,
-            payload: {
-                messages: this.messages,
-                provider: this.currentProvider
-            }
-        };
-
-        this.ws.send(JSON.stringify(wsMessage));
-    }
-
-    addMessage(role, content, id) {
-        const container = document.getElementById('chat-messages');
-        if (!container) return;
-
-        const messageEl = document.createElement('div');
-        messageEl.className = `message ${role}`;
-        if (id) messageEl.dataset.messageId = id;
-
-        const avatar = role === 'assistant' 
-            ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <circle cx="12" cy="12" r="10"/>
-                <circle cx="12" cy="12" r="4"/>
-               </svg>`
-            : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
-                <circle cx="12" cy="7" r="4"/>
-               </svg>`;
-
-        messageEl.innerHTML = `
-            <div class="message-avatar">${avatar}</div>
-            <div class="message-content">
-                <p class="message-text">${this.escapeHtml(content)}</p>
-                ${role === 'assistant' && !content ? '<span class="loading-dots">Thinking</span>' : ''}
-            </div>
-        `;
-
-        container.appendChild(messageEl);
-        container.scrollTop = container.scrollHeight;
-    }
-
-    executeCommand() {
-        const input = document.getElementById('terminal-input');
-        const command = input.value.trim();
-        
-        if (!command) return;
-
-        // Add command to output
-        this.addTerminalLine(command, 'command');
-        input.value = '';
-
-        // Execute via API or WebSocket
-        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-            const wsMessage = {
-                type: 'exec',
-                id: `exec-${++this.messageIdCounter}`,
-                payload: { command }
+            ws.onopen = () => {
+                wsConnected.value = true;
+                reconnectAttempts = 0;
             };
-            this.ws.send(JSON.stringify(wsMessage));
-        } else {
-            // Fallback to HTTP
-            this.executeCommandHttp(command);
-        }
-    }
 
-    async executeCommandHttp(command) {
-        try {
-            const response = await fetch('/api/exec', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ command })
-            });
-            
-            const result = await response.json();
-            
-            if (result.pending) {
-                this.handlePendingCommand(result);
-            } else {
-                this.addTerminalOutput(result);
+            ws.onclose = () => {
+                wsConnected.value = false;
+                attemptReconnect();
+            };
+
+            ws.onerror = (err) => {
+                console.error('WebSocket error:', err);
+            };
+
+            ws.onmessage = (event) => {
+                handleWSMessage(JSON.parse(event.data));
+            };
+        }
+
+        function attemptReconnect() {
+            if (reconnectAttempts < maxReconnectAttempts) {
+                reconnectAttempts++;
+                const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
+                setTimeout(setupWebSocket, delay);
             }
-        } catch (error) {
-            this.addTerminalLine(`Error: ${error}`, 'error');
-        }
-    }
-
-    addTerminalOutput(result) {
-        if (result.output) {
-            this.addTerminalLine(result.output, 'output');
-        }
-        if (result.error) {
-            this.addTerminalLine(result.error, 'error');
-        }
-        if (result.exit_code !== 0) {
-            this.addTerminalLine(`Exit code: ${result.exit_code}`, 'error');
-        }
-    }
-
-    addTerminalLine(content, type) {
-        const output = document.getElementById('terminal-output');
-        if (!output) return;
-
-        const line = document.createElement('div');
-        line.className = `terminal-line ${type}`;
-        line.textContent = content;
-        output.appendChild(line);
-        output.scrollTop = output.scrollHeight;
-    }
-
-    showPendingModal(result) {
-        const modal = document.getElementById('pending-modal');
-        const commandEl = document.getElementById('pending-command');
-        
-        if (modal && commandEl) {
-            commandEl.textContent = result.command;
-            modal.dataset.pendingId = result.pending_id;
-            modal.classList.remove('hidden');
-        }
-    }
-
-    async confirmPendingCommand() {
-        const modal = document.getElementById('pending-modal');
-        const pendingId = modal?.dataset.pendingId;
-        
-        if (!pendingId) return;
-
-        try {
-            const response = await fetch(`/api/exec/confirm/${pendingId}`, {
-                method: 'POST'
-            });
-            const result = await response.json();
-            this.addTerminalOutput(result);
-        } catch (error) {
-            this.showError(`Failed to execute: ${error}`);
         }
 
-        this.closePendingModal();
-    }
-
-    async cancelPendingCommand() {
-        const modal = document.getElementById('pending-modal');
-        const pendingId = modal?.dataset.pendingId;
-        
-        if (!pendingId) return;
-
-        try {
-            await fetch(`/api/exec/cancel/${pendingId}`, { method: 'POST' });
-            this.addTerminalLine('Command cancelled', 'success');
-        } catch (error) {
-            this.showError(`Failed to cancel: ${error}`);
+        function handleWSMessage(msg) {
+            switch (msg.type) {
+                case 'stream':
+                    handleStreamChunk(msg.id, msg.payload.content);
+                    break;
+                case 'stream_end':
+                    handleStreamEnd(msg.id);
+                    break;
+                case 'exec_result':
+                    handleExecResult(msg.payload);
+                    break;
+                case 'pending':
+                    handlePendingCommand(msg.payload);
+                    break;
+                case 'error':
+                    console.error('Server error:', msg.payload.error);
+                    break;
+            }
         }
 
-        this.closePendingModal();
-    }
+        // ── Chat ─────────────────────────────────────────────────────────
+        const messages = ref([]);
+        const chatInput = ref('');
+        const chatFocused = ref(false);
+        const chatMessagesEl = ref(null);
+        const chatInputEl = ref(null);
+        const currentProvider = ref('qwen');
 
-    closePendingModal() {
-        const modal = document.getElementById('pending-modal');
-        if (modal) {
-            modal.classList.add('hidden');
-            delete modal.dataset.pendingId;
-        }
-    }
-
-    async loadFiles(path) {
-        try {
-            const url = path ? `/api/files?path=${encodeURIComponent(path)}` : '/api/files';
-            const response = await fetch(url);
-            const data = await response.json();
-            
-            this.currentPath = path || '';
-            this.baseDirectory = data.base_directory;
-            this.renderFiles(data.files);
-            this.updateBreadcrumb();
-        } catch (error) {
-            console.error('Failed to load files:', error);
-        }
-    }
-
-    renderFiles(files) {
-        const container = document.getElementById('files-list');
-        if (!container) return;
-
-        if (files.length === 0) {
-            container.innerHTML = '<div class="file-item"><span class="file-name" style="color: var(--text-muted);">Empty directory</span></div>';
-            return;
-        }
-
-        // Sort: directories first, then files
-        files.sort((a, b) => {
-            if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
-            return a.name.localeCompare(b.name);
-        });
-
-        container.innerHTML = files.map(file => `
-            <div class="file-item ${file.is_dir ? 'directory' : 'file'}" data-path="${this.escapeHtml(file.path)}" data-isdir="${file.is_dir}">
-                ${file.is_dir 
-                    ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-                       </svg>`
-                    : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-                        <polyline points="14 2 14 8 20 8"/>
-                       </svg>`
-                }
-                <div class="file-info">
-                    <div class="file-name">${this.escapeHtml(file.name)}</div>
-                    <div class="file-meta">${file.is_dir ? 'Directory' : this.formatSize(file.size)} • ${file.mod_time}</div>
-                </div>
-            </div>
-        `).join('');
-
-        // Add click handlers
-        container.querySelectorAll('.file-item').forEach(item => {
-            item.addEventListener('click', () => {
-                const path = item.dataset.path;
-                const isDir = item.dataset.isdir === 'true';
-                
-                if (isDir && path) {
-                    this.loadFiles(path);
-                } else if (path) {
-                    this.openFile(path);
+        function scrollChatToBottom() {
+            nextTick(() => {
+                if (chatMessagesEl.value) {
+                    chatMessagesEl.value.scrollTop = chatMessagesEl.value.scrollHeight;
                 }
             });
-        });
-    }
-
-    updateBreadcrumb() {
-        const breadcrumb = document.getElementById('breadcrumb');
-        if (!breadcrumb) return;
-
-        const parts = this.currentPath ? this.currentPath.split('/').filter(Boolean) : [];
-        let html = `<span class="breadcrumb-item" data-path="">~/pibot-workspace</span>`;
-        
-        let currentPath = this.baseDirectory;
-        for (const part of parts) {
-            currentPath += '/' + part;
-            html += ` / <span class="breadcrumb-item" data-path="${this.escapeHtml(currentPath)}">${this.escapeHtml(part)}</span>`;
         }
 
-        breadcrumb.innerHTML = html;
+        function autoResizeTextarea() {
+            const el = chatInputEl.value;
+            if (el) {
+                el.style.height = 'auto';
+                el.style.height = Math.min(el.scrollHeight, 150) + 'px';
+            }
+        }
 
-        // Add click handlers
-        breadcrumb.querySelectorAll('.breadcrumb-item').forEach(item => {
-            item.addEventListener('click', () => {
-                const path = item.dataset.path;
-                this.loadFiles(path || undefined);
+        function quickAction(prompt) {
+            chatInput.value = prompt;
+            sendChatMessage();
+        }
+
+        function sendChatMessage() {
+            const content = chatInput.value.trim();
+            if (!content || !ws || ws.readyState !== WebSocket.OPEN) return;
+
+            const msgId = `msg-${++messageIdCounter}`;
+
+            messages.value.push({ id: `user-${msgId}`, role: 'user', content, loading: false });
+            messages.value.push({ id: msgId, role: 'assistant', content: '', loading: true });
+
+            chatInput.value = '';
+            nextTick(() => {
+                if (chatInputEl.value) chatInputEl.value.style.height = 'auto';
+                scrollChatToBottom();
+            });
+
+            const history = messages.value
+                .filter(m => !m.loading)
+                .map(m => ({ role: m.role, content: m.content }));
+
+            ws.send(JSON.stringify({
+                type: 'chat',
+                id: msgId,
+                payload: { messages: history, provider: currentProvider.value }
+            }));
+        }
+
+        function handleStreamChunk(id, content) {
+            const msg = messages.value.find(m => m.id === id);
+            if (msg) {
+                msg.content += content;
+                scrollChatToBottom();
+            }
+        }
+
+        function handleStreamEnd(id) {
+            const msg = messages.value.find(m => m.id === id);
+            if (msg) {
+                msg.loading = false;
+            }
+        }
+
+        // Simple markdown rendering: code blocks, inline code, bold, italic, line breaks
+        function renderMarkdown(text) {
+            if (!text) return '';
+            let html = text
+                // code blocks
+                .replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) =>
+                    `<pre><code>${escapeHtml(code.trim())}</code></pre>`)
+                // inline code
+                .replace(/`([^`]+)`/g, (_, c) => `<code>${escapeHtml(c)}</code>`)
+                // bold
+                .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+                // italic
+                .replace(/\*(.+?)\*/g, '<em>$1</em>')
+                // newlines
+                .replace(/\n/g, '<br>');
+            return html;
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // ── Terminal ─────────────────────────────────────────────────────
+        const terminalLines = ref([]);
+        const terminalInput = ref('');
+        const terminalOutputEl = ref(null);
+        const terminalInputEl = ref(null);
+
+        function scrollTerminalToBottom() {
+            nextTick(() => {
+                if (terminalOutputEl.value) {
+                    terminalOutputEl.value.scrollTop = terminalOutputEl.value.scrollHeight;
+                }
+            });
+        }
+
+        function clearTerminal() {
+            terminalLines.value = [];
+        }
+
+        function executeCommand() {
+            const command = terminalInput.value.trim();
+            if (!command) return;
+
+            terminalLines.value.push({ type: 'command', content: command });
+            terminalInput.value = '';
+            scrollTerminalToBottom();
+
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    type: 'exec',
+                    id: `exec-${++messageIdCounter}`,
+                    payload: { command }
+                }));
+            } else {
+                executeCommandHttp(command);
+            }
+        }
+
+        async function executeCommandHttp(command) {
+            try {
+                const resp = await fetch('/api/exec', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ command })
+                });
+                const result = await resp.json();
+                if (result.pending) {
+                    handlePendingCommand(result);
+                } else {
+                    addTerminalOutput(result);
+                }
+            } catch (err) {
+                terminalLines.value.push({ type: 'error', content: `Error: ${err}` });
+                scrollTerminalToBottom();
+            }
+        }
+
+        function handleExecResult(result) {
+            addTerminalOutput(result);
+        }
+
+        function addTerminalOutput(result) {
+            if (result.output) terminalLines.value.push({ type: 'output', content: result.output });
+            if (result.error) terminalLines.value.push({ type: 'error', content: result.error });
+            if (result.exit_code !== 0) terminalLines.value.push({ type: 'error', content: `Exit code: ${result.exit_code}` });
+            scrollTerminalToBottom();
+        }
+
+        // ── Files ─────────────────────────────────────────────────────────
+        const fileList = ref([]);
+        const currentFilePath = ref('');
+        const baseDirectory = ref('');
+        const breadcrumbs = computed(() => {
+            if (!currentFilePath.value) return [];
+            const parts = currentFilePath.value.split('/').filter(Boolean);
+            let base = baseDirectory.value;
+            return parts.map(part => {
+                base = base + '/' + part;
+                return { name: part, path: base };
             });
         });
-    }
 
-    async openFile(path) {
-        // For now, just show file content in an alert. In a full implementation,
-        // this would open a modal with an editor.
-        try {
-            const relativePath = path.replace(this.baseDirectory + '/', '');
-            const response = await fetch(`/api/files/${encodeURIComponent(relativePath)}`);
-            const data = await response.json();
-            
-            // Switch to chat and show content
-            this.switchView('chat');
-            this.addMessage('assistant', `**File: ${path}**\n\n\`\`\`\n${data.content}\n\`\`\``);
-        } catch (error) {
-            this.showError(`Failed to read file: ${error}`);
+        async function loadFiles(path) {
+            try {
+                const url = path ? `/api/files?path=${encodeURIComponent(path)}` : '/api/files';
+                const resp = await fetch(url);
+                const data = await resp.json();
+                currentFilePath.value = path || '';
+                baseDirectory.value = data.base_directory || '';
+                const sorted = (data.files || []).slice().sort((a, b) => {
+                    if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
+                    return a.name.localeCompare(b.name);
+                });
+                fileList.value = sorted;
+            } catch (err) {
+                console.error('Failed to load files:', err);
+            }
         }
-    }
 
-    formatSize(bytes) {
-        const units = ['B', 'KB', 'MB', 'GB'];
-        let size = bytes;
-        let unitIndex = 0;
-        
-        while (size >= 1024 && unitIndex < units.length - 1) {
-            size /= 1024;
-            unitIndex++;
+        function onFileClick(file) {
+            if (file.is_dir) {
+                loadFiles(file.path);
+            } else {
+                openFile(file.path);
+            }
         }
-        
-        return `${size.toFixed(unitIndex > 0 ? 1 : 0)} ${units[unitIndex]}`;
-    }
 
-    showError(message) {
-        console.error(message);
-        // In a full implementation, this would show a toast notification
-        alert(message);
-    }
+        async function openFile(path) {
+            try {
+                const relativePath = path.replace(baseDirectory.value + '/', '');
+                const resp = await fetch(`/api/files/${encodeURIComponent(relativePath)}`);
+                const data = await resp.json();
+                currentView.value = 'chat';
+                messages.value.push({
+                    id: `file-${++messageIdCounter}`,
+                    role: 'assistant',
+                    content: `**File: ${path}**\n\n\`\`\`\n${data.content}\n\`\`\``,
+                    loading: false
+                });
+                scrollChatToBottom();
+            } catch (err) {
+                console.error('Failed to read file:', err);
+            }
+        }
 
-    escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
-    }
-}
+        function formatSize(bytes) {
+            const units = ['B', 'KB', 'MB', 'GB'];
+            let size = bytes;
+            let i = 0;
+            while (size >= 1024 && i < units.length - 1) { size /= 1024; i++; }
+            return `${size.toFixed(i > 0 ? 1 : 0)} ${units[i]}`;
+        }
 
-// Initialize the application
-document.addEventListener('DOMContentLoaded', () => {
-    new PiBot();
-});
+        // ── Pending Command Modal ─────────────────────────────────────────
+        const pendingModal = reactive({ visible: false, command: '', pendingId: '' });
+
+        function handlePendingCommand(result) {
+            pendingModal.command = result.command;
+            pendingModal.pendingId = result.pending_id;
+            pendingModal.visible = true;
+        }
+
+        async function confirmPendingCommand() {
+            try {
+                const resp = await fetch(`/api/exec/confirm/${pendingModal.pendingId}`, { method: 'POST' });
+                const result = await resp.json();
+                addTerminalOutput(result);
+            } catch (err) {
+                console.error('Failed to confirm command:', err);
+            }
+            pendingModal.visible = false;
+        }
+
+        async function cancelPendingCommand() {
+            try {
+                await fetch(`/api/exec/cancel/${pendingModal.pendingId}`, { method: 'POST' });
+                terminalLines.value.push({ type: 'success', content: 'Command cancelled' });
+                scrollTerminalToBottom();
+            } catch (err) {
+                console.error('Failed to cancel command:', err);
+            }
+            pendingModal.visible = false;
+        }
+
+        // ── Settings ──────────────────────────────────────────────────────
+        const settingsForm = reactive({
+            default_provider: 'openai',
+            openai_key: '',
+            openai_model: 'gpt-4o',
+            anthropic_key: '',
+            anthropic_model: 'claude-3-5-sonnet-20241022',
+            google_key: '',
+            google_model: 'gemini-1.5-pro',
+            ollama_base_url: '',
+            ollama_model: '',
+            qwen_key: '',
+            qwen_base_url: '',
+            qwen_model: 'qwen-plus',
+        });
+        const saveStatusMsg = ref('');
+        const saveStatusError = ref(false);
+
+        async function loadConfig() {
+            try {
+                const resp = await fetch('/api/config');
+                const cfg = await resp.json();
+                if (cfg.default_provider) {
+                    settingsForm.default_provider = cfg.default_provider;
+                    currentProvider.value = cfg.default_provider;
+                }
+                if (cfg.openai_model) settingsForm.openai_model = cfg.openai_model;
+                if (cfg.anthropic_model) settingsForm.anthropic_model = cfg.anthropic_model;
+                if (cfg.google_model) settingsForm.google_model = cfg.google_model;
+                if (cfg.ollama_base_url) settingsForm.ollama_base_url = cfg.ollama_base_url;
+                if (cfg.ollama_model) settingsForm.ollama_model = cfg.ollama_model;
+                if (cfg.qwen_base_url) settingsForm.qwen_base_url = cfg.qwen_base_url;
+                if (cfg.qwen_model) settingsForm.qwen_model = cfg.qwen_model;
+                if (cfg.base_directory) baseDirectory.value = cfg.base_directory;
+            } catch (err) {
+                console.error('Failed to load config:', err);
+            }
+        }
+
+        async function saveSettings() {
+            const payload = {};
+            if (settingsForm.default_provider) payload.default_provider = settingsForm.default_provider;
+            if (settingsForm.openai_key) payload.openai_key = settingsForm.openai_key;
+            if (settingsForm.openai_model) payload.openai_model = settingsForm.openai_model;
+            if (settingsForm.anthropic_key) payload.anthropic_key = settingsForm.anthropic_key;
+            if (settingsForm.anthropic_model) payload.anthropic_model = settingsForm.anthropic_model;
+            if (settingsForm.google_key) payload.google_key = settingsForm.google_key;
+            if (settingsForm.google_model) payload.google_model = settingsForm.google_model;
+            if (settingsForm.ollama_base_url) payload.ollama_base_url = settingsForm.ollama_base_url;
+            if (settingsForm.ollama_model) payload.ollama_model = settingsForm.ollama_model;
+            if (settingsForm.qwen_key) payload.qwen_key = settingsForm.qwen_key;
+            if (settingsForm.qwen_base_url) payload.qwen_base_url = settingsForm.qwen_base_url;
+            if (settingsForm.qwen_model) payload.qwen_model = settingsForm.qwen_model;
+
+            try {
+                const resp = await fetch('/api/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                if (resp.ok) {
+                    saveStatusMsg.value = 'Settings saved successfully!';
+                    saveStatusError.value = false;
+                    settingsForm.openai_key = '';
+                    settingsForm.anthropic_key = '';
+                    settingsForm.google_key = '';
+                    settingsForm.qwen_key = '';
+                    currentProvider.value = settingsForm.default_provider;
+                } else {
+                    const err = await resp.json();
+                    saveStatusMsg.value = `Failed to save: ${err.error}`;
+                    saveStatusError.value = true;
+                }
+            } catch (err) {
+                saveStatusMsg.value = `Error: ${err}`;
+                saveStatusError.value = true;
+            }
+            setTimeout(() => { saveStatusMsg.value = ''; }, 5000);
+        }
+
+        // ── Init ──────────────────────────────────────────────────────────
+        onMounted(() => {
+            setupWebSocket();
+            loadConfig();
+            loadFiles('');
+        });
+
+        return {
+            currentView,
+            wsConnected,
+            currentProvider,
+            // chat
+            messages,
+            chatInput,
+            chatFocused,
+            chatMessagesEl,
+            chatInputEl,
+            sendChatMessage,
+            quickAction,
+            autoResizeTextarea,
+            renderMarkdown,
+            // terminal
+            terminalLines,
+            terminalInput,
+            terminalOutputEl,
+            terminalInputEl,
+            clearTerminal,
+            executeCommand,
+            // files
+            fileList,
+            currentFilePath,
+            breadcrumbs,
+            loadFiles,
+            onFileClick,
+            formatSize,
+            // pending modal
+            pendingModal,
+            confirmPendingCommand,
+            cancelPendingCommand,
+            // settings
+            settingsForm,
+            saveStatusMsg,
+            saveStatusError,
+            saveSettings,
+        };
+    }
+}).mount('#app');
