@@ -1,0 +1,306 @@
+package api
+
+import (
+	"context"
+	"encoding/json"
+	"log"
+	"net/http"
+	"sync"
+	"time"
+
+	"github.com/gorilla/websocket"
+	"github.com/pibot/pibot/internal/ai"
+)
+
+var upgrader = websocket.Upgrader{
+	ReadBufferSize:  1024,
+	WriteBufferSize: 1024,
+	CheckOrigin: func(r *http.Request) bool {
+		return true // Allow all origins for local network use
+	},
+}
+
+// WebSocket message types
+const (
+	MsgTypeChat        = "chat"
+	MsgTypeExec        = "exec"
+	MsgTypeStream      = "stream"
+	MsgTypeStreamEnd   = "stream_end"
+	MsgTypeExecResult  = "exec_result"
+	MsgTypeError       = "error"
+	MsgTypePending     = "pending"
+)
+
+// WSMessage represents a WebSocket message
+type WSMessage struct {
+	Type     string          `json:"type"`
+	ID       string          `json:"id,omitempty"`
+	Payload  json.RawMessage `json:"payload"`
+}
+
+// ChatPayload represents a chat message payload
+type ChatPayload struct {
+	Messages []ai.Message `json:"messages"`
+	Provider string       `json:"provider,omitempty"`
+}
+
+// ExecPayload represents a command execution payload
+type ExecPayload struct {
+	Command string `json:"command"`
+}
+
+// Client represents a WebSocket client
+type Client struct {
+	hub    *Hub
+	conn   *websocket.Conn
+	send   chan []byte
+	server *Server
+}
+
+// Hub manages WebSocket clients
+type Hub struct {
+	clients    map[*Client]bool
+	register   chan *Client
+	unregister chan *Client
+	mu         sync.RWMutex
+}
+
+// NewHub creates a new WebSocket hub
+func NewHub() *Hub {
+	return &Hub{
+		clients:    make(map[*Client]bool),
+		register:   make(chan *Client),
+		unregister: make(chan *Client),
+	}
+}
+
+// Run starts the hub's main loop
+func (h *Hub) Run() {
+	for {
+		select {
+		case client := <-h.register:
+			h.mu.Lock()
+			h.clients[client] = true
+			h.mu.Unlock()
+		case client := <-h.unregister:
+			h.mu.Lock()
+			if _, ok := h.clients[client]; ok {
+				delete(h.clients, client)
+				close(client.send)
+			}
+			h.mu.Unlock()
+		}
+	}
+}
+
+// handleWebSocket handles WebSocket connections
+func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Printf("WebSocket upgrade error: %v", err)
+		return
+	}
+
+	client := &Client{
+		hub:    s.wsHub,
+		conn:   conn,
+		send:   make(chan []byte, 256),
+		server: s,
+	}
+
+	client.hub.register <- client
+
+	go client.writePump()
+	go client.readPump()
+}
+
+// readPump reads messages from the WebSocket connection
+func (c *Client) readPump() {
+	defer func() {
+		c.hub.unregister <- c
+		c.conn.Close()
+	}()
+
+	c.conn.SetReadLimit(512 * 1024) // 512KB max message size
+	c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	c.conn.SetPongHandler(func(string) error {
+		c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		return nil
+	})
+
+	for {
+		_, message, err := c.conn.ReadMessage()
+		if err != nil {
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+				log.Printf("WebSocket error: %v", err)
+			}
+			break
+		}
+
+		var msg WSMessage
+		if err := json.Unmarshal(message, &msg); err != nil {
+			c.sendError("Invalid message format")
+			continue
+		}
+
+		c.handleMessage(msg)
+	}
+}
+
+// writePump writes messages to the WebSocket connection
+func (c *Client) writePump() {
+	ticker := time.NewTicker(30 * time.Second)
+	defer func() {
+		ticker.Stop()
+		c.conn.Close()
+	}()
+
+	for {
+		select {
+		case message, ok := <-c.send:
+			c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			if !ok {
+				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
+				return
+			}
+
+			if err := c.conn.WriteMessage(websocket.TextMessage, message); err != nil {
+				return
+			}
+		case <-ticker.C:
+			c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				return
+			}
+		}
+	}
+}
+
+// handleMessage processes incoming WebSocket messages
+func (c *Client) handleMessage(msg WSMessage) {
+	switch msg.Type {
+	case MsgTypeChat:
+		c.handleChatMessage(msg)
+	case MsgTypeExec:
+		c.handleExecMessage(msg)
+	default:
+		c.sendError("Unknown message type")
+	}
+}
+
+// handleChatMessage handles chat messages with streaming and tool support
+func (c *Client) handleChatMessage(msg WSMessage) {
+	var payload ChatPayload
+	if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+		c.sendError("Invalid chat payload")
+		return
+	}
+
+	if len(payload.Messages) == 0 {
+		c.sendError("No messages provided")
+		return
+	}
+
+	// Create a channel for streaming
+	ch := make(chan string, 100)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	// Determine provider
+	provider := payload.Provider
+	if provider == "" {
+		provider = c.server.config.GetAI().DefaultProvider
+	}
+
+	// Start streaming with tool support
+	go func() {
+		err := c.server.chatSession.StreamChatWithTools(ctx, provider, payload.Messages, ch)
+		if err != nil {
+			c.sendError(err.Error())
+		}
+	}()
+
+	// Send chunks as they arrive
+	for chunk := range ch {
+		c.sendMessage(WSMessage{
+			Type: MsgTypeStream,
+			ID:   msg.ID,
+			Payload: mustMarshal(map[string]string{
+				"content": chunk,
+			}),
+		})
+	}
+
+	// Send end of stream
+	c.sendMessage(WSMessage{
+		Type: MsgTypeStreamEnd,
+		ID:   msg.ID,
+		Payload: mustMarshal(map[string]string{
+			"status": "complete",
+		}),
+	})
+}
+
+// handleExecMessage handles command execution messages
+func (c *Client) handleExecMessage(msg WSMessage) {
+	var payload ExecPayload
+	if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+		c.sendError("Invalid exec payload")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	result, err := c.server.executor.Execute(ctx, payload.Command)
+	if err != nil {
+		c.sendError(err.Error())
+		return
+	}
+
+	if result.Pending {
+		c.sendMessage(WSMessage{
+			Type:    MsgTypePending,
+			ID:      msg.ID,
+			Payload: mustMarshal(result),
+		})
+	} else {
+		c.sendMessage(WSMessage{
+			Type:    MsgTypeExecResult,
+			ID:      msg.ID,
+			Payload: mustMarshal(result),
+		})
+	}
+}
+
+// sendMessage sends a message to the client
+func (c *Client) sendMessage(msg WSMessage) {
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return
+	}
+	select {
+	case c.send <- data:
+	default:
+		// Client buffer full, skip message
+	}
+}
+
+// sendError sends an error message to the client
+func (c *Client) sendError(errMsg string) {
+	c.sendMessage(WSMessage{
+		Type: MsgTypeError,
+		Payload: mustMarshal(map[string]string{
+			"error": errMsg,
+		}),
+	})
+}
+
+// mustMarshal marshals to JSON or panics
+func mustMarshal(v interface{}) json.RawMessage {
+	data, err := json.Marshal(v)
+	if err != nil {
+		panic(err)
+	}
+	return data
+}

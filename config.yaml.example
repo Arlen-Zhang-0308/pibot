@@ -1,0 +1,91 @@
+server:
+    host: 0.0.0.0
+    port: 8080
+ai:
+    default_provider: ollama
+    openai:
+        api_key: ""
+        model: gpt-4o
+    anthropic:
+        api_key: ""
+        model: claude-sonnet-4-20250514
+    google:
+        api_key: ""
+        model: gemini-1.5-pro
+    ollama:
+        base_url: http://localhost:11434
+        model: llama3
+    qwen:
+        api_key: ""  # Set your DashScope API key here
+        base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+        model: qwen-plus
+executor:
+    safe_commands:
+        - ls
+        - pwd
+        - cat
+        - echo
+        - whoami
+        - date
+        - uptime
+        - df
+        - free
+        - ps
+        - head
+        - tail
+        - wc
+        - grep
+        - find
+        - which
+        - env
+        - hostname
+    moderate_commands:
+        - mkdir
+        - cp
+        - mv
+        - touch
+        - chmod
+        - chown
+        - tar
+        - gzip
+        - gunzip
+        - zip
+        - unzip
+        - wget
+        - curl
+    dangerous_commands:
+        - rm
+        - sudo
+        - apt
+        - yum
+        - dnf
+        - pacman
+        - pip
+        - npm
+        - go
+        - make
+        - systemctl
+        - service
+        - reboot
+        - shutdown
+        - kill
+        - pkill
+    blocked_commands:
+        - dd
+        - mkfs
+        - fdisk
+        - parted
+        - format
+        - ':(){:|:&};:'
+fileops:
+    base_directory: ~/pibot-workspace
+    allowed_paths: []
+prompts:
+    # Custom system prompt (leave empty to use default PiBot system prompt)
+    # You can customize this to change PiBot's personality and instructions
+    system_prompt: ""
+    # Bot name for identity (default: PiBot)
+    bot_name: PiBot
+    # Enable tool calling for AI assistants (default: true)
+    # When enabled, PiBot can execute commands, read/write files, and more
+    enable_tools: true

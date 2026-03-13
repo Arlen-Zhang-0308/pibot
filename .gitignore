@@ -1,0 +1,53 @@
+# Binaries
+pibot
+pibot-arm
+pibot-arm64
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+coverage.html
+
+# Go workspace file
+go.work
+
+# Dependency directories
+vendor/
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Configuration with secrets (use config.yaml.example instead)
+# Uncomment the line below if you don't want to track config.yaml
+# config.yaml
+
+# Log files
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# PiBot workspace directory
+pibot-workspace/
+
+# Debug files
+__debug_bin*
+
+# Environment variables
+.env
+config.yaml
