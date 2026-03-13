@@ -89,3 +89,6 @@ prompts:
     # Enable tool calling for AI assistants (default: true)
     # When enabled, PiBot can execute commands, read/write files, and more
     enable_tools: true
+# Path to directory containing external skills (default: ~/.pibot_skills)
+# Each subdirectory should contain a skill.yaml manifest and an executable file.
+skills_path: ~/.pibot_skills

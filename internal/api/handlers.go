@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"path/filepath"
 
@@ -18,6 +19,7 @@ func jsonResponse(w http.ResponseWriter, status int, data interface{}) {
 }
 
 func errorResponse(w http.ResponseWriter, status int, message string) {
+	log.Printf("[api] ERROR %d: %s", status, message)
 	jsonResponse(w, status, map[string]string{"error": message})
 }
 
@@ -49,6 +51,8 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		errorResponse(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
+
+	log.Printf("[api] config update requested from %s", r.RemoteAddr)
 
 	err := s.config.Update(func(c *config.Config) {
 		if req.DefaultProvider != "" {
@@ -94,6 +98,7 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	log.Printf("[api] config updated successfully")
 	jsonResponse(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 
@@ -123,19 +128,21 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Determine provider
 	providerName := req.Provider
 	if providerName == "" {
 		providerName = s.config.GetAI().DefaultProvider
 	}
 
-	// Use chat session with tool support
+	log.Printf("[api] chat request from %s provider=%s messages=%d", r.RemoteAddr, providerName, len(req.Messages))
+
 	response, err := s.chatSession.ChatWithTools(r.Context(), providerName, req.Messages)
 	if err != nil {
+		log.Printf("[api] chat request ERROR provider=%s: %v", providerName, err)
 		errorResponse(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
+	log.Printf("[api] chat request completed provider=%s response_len=%d", providerName, len(response))
 	jsonResponse(w, http.StatusOK, ChatResponse{
 		Response: response,
 		Provider: providerName,
@@ -164,8 +171,11 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	log.Printf("[api] exec request from %s: %s", r.RemoteAddr, req.Command)
+
 	result, err := s.executor.Execute(r.Context(), req.Command)
 	if err != nil {
+		log.Printf("[api] exec request ERROR: %v", err)
 		errorResponse(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -177,8 +187,11 @@ func (s *Server) handleExecConfirm(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	pendingID := vars["id"]
 
+	log.Printf("[api] exec confirm from %s pending_id=%s", r.RemoteAddr, pendingID)
+
 	result, err := s.executor.ExecuteConfirmed(r.Context(), pendingID)
 	if err != nil {
+		log.Printf("[api] exec confirm ERROR pending_id=%s: %v", pendingID, err)
 		errorResponse(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -189,6 +202,8 @@ func (s *Server) handleExecConfirm(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleExecCancel(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	pendingID := vars["id"]
+
+	log.Printf("[api] exec cancel from %s pending_id=%s", r.RemoteAddr, pendingID)
 
 	if err := s.executor.CancelPending(pendingID); err != nil {
 		errorResponse(w, http.StatusBadRequest, err.Error())

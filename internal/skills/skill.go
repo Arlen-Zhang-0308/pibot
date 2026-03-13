@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"sync"
+	"time"
 )
 
 // Skill defines the interface for a PiBot skill/tool
@@ -64,6 +66,7 @@ func (r *Registry) Register(skill Skill) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.skills[skill.Name()] = skill
+	log.Printf("[skills] registered skill %q", skill.Name())
 }
 
 // Get retrieves a skill by name
@@ -108,15 +111,30 @@ func (r *Registry) GetToolDefinitions() []ToolDefinition {
 func (r *Registry) Execute(ctx context.Context, name string, params json.RawMessage) (string, error) {
 	skill, ok := r.Get(name)
 	if !ok {
-		return "", fmt.Errorf("skill %q not found", name)
+		err := fmt.Errorf("skill %q not found", name)
+		log.Printf("[skills] ERROR skill not found: %q", name)
+		return "", err
 	}
-	return skill.Execute(ctx, params)
+
+	log.Printf("[skills] executing skill %q params=%s", name, params)
+	start := time.Now()
+	result, err := skill.Execute(ctx, params)
+	elapsed := time.Since(start)
+
+	if err != nil {
+		log.Printf("[skills] skill %q FAILED in %s: %v", name, elapsed, err)
+		return "", err
+	}
+
+	log.Printf("[skills] skill %q completed in %s", name, elapsed)
+	return result, nil
 }
 
 // ExecuteToolCall executes a tool call and returns the result
 func (r *Registry) ExecuteToolCall(ctx context.Context, call ToolCall) ToolResult {
 	result, err := r.Execute(ctx, call.Name, call.Arguments)
 	if err != nil {
+		log.Printf("[skills] tool call %q (id=%s) returned error: %v", call.Name, call.ID, err)
 		return ToolResult{
 			ToolCallID: call.ID,
 			Content:    fmt.Sprintf("Error: %v", err),

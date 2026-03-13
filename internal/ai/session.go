@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"os"
 	"strings"
 	"text/template"
@@ -147,14 +148,13 @@ func (s *ChatSession) convertToolDefinitions() []openai.Tool {
 
 // ChatWithTools sends messages with tool support and handles tool calls
 func (s *ChatSession) ChatWithTools(ctx context.Context, providerName string, messages []Message) (string, error) {
-	// Check if provider supports native tools (OpenAI/Qwen compatible)
 	if s.supportsNativeTools(providerName) {
-		// Prepare messages with standard system prompt
+		log.Printf("[ai] chat with native tools provider=%s messages=%d", providerName, len(messages))
 		messages = s.PrepareMessages(messages)
 		return s.chatWithNativeTools(ctx, providerName, messages)
 	}
 
-	// Use prompt-based tools for providers without native tool support
+	log.Printf("[ai] chat with prompt-based tools provider=%s messages=%d", providerName, len(messages))
 	return s.chatWithPromptBasedTools(ctx, providerName, messages)
 }
 
@@ -172,25 +172,30 @@ func (s *ChatSession) chatWithPromptBasedTools(ctx context.Context, providerName
 
 	// Tool execution loop
 	for iteration := 0; iteration < MaxPromptToolIterations; iteration++ {
+		log.Printf("[ai] prompt-based tool loop iteration=%d provider=%s", iteration+1, providerName)
+
 		response, err := provider.Chat(ctx, messages)
 		if err != nil {
+			log.Printf("[ai] Chat ERROR provider=%s: %v", providerName, err)
 			return "", err
 		}
 
 		fullResponse.WriteString(response)
 
-		// Check for action blocks in the response
 		actions := ParseActions(response)
 		if len(actions) == 0 {
-			// No actions, return the response
+			log.Printf("[ai] no actions in response, done (iteration=%d)", iteration+1)
 			return fullResponse.String(), nil
 		}
 
-		// Execute actions and collect results
+		log.Printf("[ai] AI requested %d action(s) (iteration=%d)", len(actions), iteration+1)
+
 		var resultBuilder strings.Builder
 		for _, action := range actions {
+			log.Printf("[ai] executing action: %s", action.Type)
 			result, err := ExecuteAction(ctx, s.registry, action)
 			if err != nil {
+				log.Printf("[ai] action %q ERROR: %v", action.Type, err)
 				resultBuilder.WriteString(FormatActionResult(action, "Error: "+err.Error(), true))
 			} else {
 				resultBuilder.WriteString(FormatActionResult(action, result, false))
@@ -263,12 +268,15 @@ func (s *ChatSession) chatWithNativeTools(ctx context.Context, providerName stri
 
 	// Tool calling loop
 	for iteration := 0; iteration < MaxToolIterations; iteration++ {
+		log.Printf("[ai] native tool loop iteration=%d provider=%s", iteration+1, providerName)
+
 		resp, err := client.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
 			Model:    model,
 			Messages: openaiMessages,
 			Tools:    tools,
 		})
 		if err != nil {
+			log.Printf("[ai] CreateChatCompletion ERROR provider=%s: %v", providerName, err)
 			return "", err
 		}
 
@@ -279,17 +287,17 @@ func (s *ChatSession) chatWithNativeTools(ctx context.Context, providerName stri
 		choice := resp.Choices[0]
 		assistantMsg := choice.Message
 
-		// Add assistant message to history
 		openaiMessages = append(openaiMessages, assistantMsg)
 
-		// Check if there are tool calls
 		if len(assistantMsg.ToolCalls) == 0 {
-			// No tool calls, return the content
+			log.Printf("[ai] no tool calls in response, done (iteration=%d)", iteration+1)
 			return assistantMsg.Content, nil
 		}
 
-		// Execute tool calls
+		log.Printf("[ai] AI requested %d tool call(s)", len(assistantMsg.ToolCalls))
+
 		for _, toolCall := range assistantMsg.ToolCalls {
+			log.Printf("[ai] tool call: name=%s id=%s args=%s", toolCall.Function.Name, toolCall.ID, toolCall.Function.Arguments)
 			call := skills.ToolCall{
 				ID:        toolCall.ID,
 				Name:      toolCall.Function.Name,
@@ -297,8 +305,10 @@ func (s *ChatSession) chatWithNativeTools(ctx context.Context, providerName stri
 			}
 
 			result := s.registry.ExecuteToolCall(ctx, call)
+			if result.IsError {
+				log.Printf("[ai] tool call %q returned error: %s", toolCall.Function.Name, result.Content)
+			}
 
-			// Add tool result to messages
 			openaiMessages = append(openaiMessages, openai.ChatCompletionMessage{
 				Role:       openai.ChatMessageRoleTool,
 				Content:    result.Content,
@@ -307,6 +317,7 @@ func (s *ChatSession) chatWithNativeTools(ctx context.Context, providerName stri
 		}
 	}
 
+	log.Printf("[ai] ERROR: reached maximum tool iterations (%d)", MaxToolIterations)
 	return "", errors.New("maximum tool iterations reached")
 }
 
@@ -364,6 +375,8 @@ func (s *ChatSession) streamChatWithNativeTools(ctx context.Context, providerNam
 
 	// Tool calling loop with streaming
 	for iteration := 0; iteration < MaxToolIterations; iteration++ {
+		log.Printf("[ai] stream native tool loop iteration=%d provider=%s", iteration+1, providerName)
+
 		stream, err := client.CreateChatCompletionStream(ctx, openai.ChatCompletionRequest{
 			Model:    model,
 			Messages: openaiMessages,
@@ -371,6 +384,7 @@ func (s *ChatSession) streamChatWithNativeTools(ctx context.Context, providerNam
 			Stream:   true,
 		})
 		if err != nil {
+			log.Printf("[ai] CreateChatCompletionStream ERROR provider=%s: %v", providerName, err)
 			return err
 		}
 
@@ -442,13 +456,15 @@ func (s *ChatSession) streamChatWithNativeTools(ctx context.Context, providerNam
 		}
 		openaiMessages = append(openaiMessages, assistantMsg)
 
-		// If no tool calls, we're done
 		if len(toolCalls) == 0 {
+			log.Printf("[ai] stream: no tool calls, done (iteration=%d)", iteration+1)
 			return nil
 		}
 
-		// Execute tool calls and add results
+		log.Printf("[ai] stream: AI requested %d tool call(s)", len(toolCalls))
+
 		for _, toolCall := range toolCalls {
+			log.Printf("[ai] stream tool call: name=%s id=%s args=%s", toolCall.Function.Name, toolCall.ID, toolCall.Function.Arguments)
 			call := skills.ToolCall{
 				ID:        toolCall.ID,
 				Name:      toolCall.Function.Name,
@@ -456,18 +472,19 @@ func (s *ChatSession) streamChatWithNativeTools(ctx context.Context, providerNam
 			}
 
 			result := s.registry.ExecuteToolCall(ctx, call)
+			if result.IsError {
+				log.Printf("[ai] stream tool call %q returned error: %s", toolCall.Function.Name, result.Content)
+			}
 
-			// Add tool result to messages
 			openaiMessages = append(openaiMessages, openai.ChatCompletionMessage{
 				Role:       openai.ChatMessageRoleTool,
 				Content:    result.Content,
 				ToolCallID: toolCall.ID,
 			})
 		}
-
-		// Continue loop to get AI response after tool execution
 	}
 
+	log.Printf("[ai] stream ERROR: reached maximum tool iterations (%d)", MaxToolIterations)
 	return errors.New("maximum tool iterations reached")
 }
 

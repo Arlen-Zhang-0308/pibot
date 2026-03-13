@@ -10,12 +10,13 @@ import (
 
 // Config holds all application configuration
 type Config struct {
-	Server    ServerConfig    `yaml:"server"`
-	AI        AIConfig        `yaml:"ai"`
-	Executor  ExecutorConfig  `yaml:"executor"`
-	FileOps   FileOpsConfig   `yaml:"fileops"`
-	Prompts   PromptsConfig   `yaml:"prompts"`
-	mu        sync.RWMutex    `yaml:"-"`
+	Server     ServerConfig   `yaml:"server"`
+	AI         AIConfig       `yaml:"ai"`
+	Executor   ExecutorConfig `yaml:"executor"`
+	FileOps    FileOpsConfig  `yaml:"fileops"`
+	Prompts    PromptsConfig  `yaml:"prompts"`
+	SkillsPath string         `yaml:"skills_path"`
+	mu         sync.RWMutex   `yaml:"-"`
 	configPath string         `yaml:"-"`
 }
 
@@ -132,6 +133,7 @@ func DefaultConfig() *Config {
 			BotName:     "PiBot",
 			EnableTools: true,
 		},
+		SkillsPath: "~/.pibot_skills",
 	}
 }
 
@@ -213,6 +215,17 @@ func (c *Config) GetPrompts() PromptsConfig {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.Prompts
+}
+
+// GetSkillsPath returns the path to the external skills directory (thread-safe).
+// Defaults to ~/.pibot_skills if not configured.
+func (c *Config) GetSkillsPath() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.SkillsPath == "" {
+		return "~/.pibot_skills"
+	}
+	return c.SkillsPath
 }
 
 // PublicConfig returns a config safe to expose (without API keys)

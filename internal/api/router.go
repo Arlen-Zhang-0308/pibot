@@ -1,6 +1,7 @@
 package api
 
 import (
+	"log"
 	"net/http"
 
 	"github.com/gorilla/mux"
@@ -28,12 +29,18 @@ func NewServer(cfg *config.Config, aiMgr *ai.Manager, exec *executor.Executor, f
 	// Create skills registry
 	skillsRegistry := skills.NewRegistry()
 
-	// Register skills
+	// Register built-in skills
 	skillsRegistry.Register(skills.NewExecuteCommandSkill(exec))
 	skillsRegistry.Register(skills.NewReadFileSkill(fops))
 	skillsRegistry.Register(skills.NewWriteFileSkill(fops))
 	skillsRegistry.Register(skills.NewListDirectorySkill(fops))
 	skillsRegistry.Register(skills.NewSystemInfoSkill(fops))
+
+	// Load external skills from ~/.pibot_skills
+	skillsPath := cfg.GetSkillsPath()
+	if err := skills.LoadExternalSkills(skillsRegistry, skillsPath); err != nil {
+		log.Printf("Warning: failed to load external skills from %s: %v", skillsPath, err)
+	}
 
 	// Create chat session with tools
 	chatSession := ai.NewChatSession(cfg, skillsRegistry, aiMgr)

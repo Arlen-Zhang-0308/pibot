@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os/exec"
 	"strings"
 	"time"
@@ -47,7 +48,7 @@ func (e *Executor) Execute(ctx context.Context, command string) (*ExecutionResul
 	}
 
 	level := e.sandbox.ClassifyCommand(command)
-	
+
 	result := &ExecutionResult{
 		Command: command,
 		Level:   level.String(),
@@ -55,18 +56,19 @@ func (e *Executor) Execute(ctx context.Context, command string) (*ExecutionResul
 
 	switch level {
 	case LevelBlocked:
+		log.Printf("[exec] BLOCKED command (level=%s): %s", level, command)
 		return nil, fmt.Errorf("command is blocked for security reasons: %s", command)
-	
+
 	case LevelDangerous, LevelUnknown:
-		// Requires confirmation
 		pendingID := uuid.New().String()
 		e.sandbox.AddPending(pendingID, command, level)
 		result.Pending = true
 		result.PendingID = pendingID
+		log.Printf("[exec] command requires confirmation (level=%s, pending_id=%s): %s", level, pendingID, command)
 		return result, nil
-	
+
 	case LevelSafe, LevelModerate:
-		// Execute directly
+		log.Printf("[exec] running command (level=%s): %s", level, command)
 		return e.executeCommand(ctx, command, level)
 	}
 
@@ -81,18 +83,20 @@ func (e *Executor) ExecuteConfirmed(ctx context.Context, pendingID string) (*Exe
 	}
 
 	e.sandbox.RemovePending(pendingID)
-	
+	log.Printf("[exec] confirmed pending command (pending_id=%s): %s", pendingID, pending.Command)
+
 	level := e.sandbox.ClassifyCommand(pending.Command)
 	return e.executeCommand(ctx, pending.Command, level)
 }
 
 // CancelPending removes a pending command without executing
 func (e *Executor) CancelPending(pendingID string) error {
-	_, ok := e.sandbox.GetPending(pendingID)
+	pending, ok := e.sandbox.GetPending(pendingID)
 	if !ok {
 		return fmt.Errorf("pending command not found: %s", pendingID)
 	}
 	e.sandbox.RemovePending(pendingID)
+	log.Printf("[exec] cancelled pending command (pending_id=%s): %s", pendingID, pending.Command)
 	return nil
 }
 
@@ -105,12 +109,11 @@ func (e *Executor) ListPending() []*PendingCommand {
 func (e *Executor) executeCommand(ctx context.Context, command string, level CommandLevel) (*ExecutionResult, error) {
 	start := time.Now()
 
-	// Create command with context for timeout
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "bash", "-c", command)
-	
+
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -136,11 +139,26 @@ func (e *Executor) executeCommand(ctx context.Context, command string, level Com
 				result.Error = err.Error()
 			}
 		}
+		log.Printf("[exec] command FAILED (exit=%d, duration=%s): %s\n  stdout: %s\n  stderr: %s",
+			result.ExitCode, duration, command,
+			truncateLog(stdout.String(), 512),
+			truncateLog(result.Error, 512))
 	} else {
 		result.ExitCode = 0
+		log.Printf("[exec] command succeeded (exit=0, duration=%s): %s\n  stdout: %s",
+			duration, command, truncateLog(stdout.String(), 512))
 	}
 
 	return result, nil
+}
+
+// truncateLog truncates s to maxLen characters for log output, appending "…" if trimmed.
+func truncateLog(s string, maxLen int) string {
+	s = strings.TrimRight(s, "\n")
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "…"
 }
 
 // GetSandbox returns the sandbox for direct access
