@@ -35,7 +35,7 @@ func newTestServer(t *testing.T) (*Server, string) {
 	fops := fileops.NewFileOps(cfg)
 	fops.EnsureBaseDirectory()
 
-	server := NewServer(cfg, aiMgr, exec, fops)
+	server := NewServer(cfg, aiMgr, exec, fops, nil)
 	return server, tmpDir
 }
 

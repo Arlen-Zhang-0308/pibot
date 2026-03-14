@@ -146,8 +146,18 @@ func (s *ChatSession) convertToolDefinitions() []openai.Tool {
 	return tools
 }
 
+// resolveProvider returns the given provider name, falling back to the configured
+// default when the name is empty.
+func (s *ChatSession) resolveProvider(providerName string) string {
+	if providerName == "" {
+		return s.config.GetAI().DefaultProvider
+	}
+	return providerName
+}
+
 // ChatWithTools sends messages with tool support and handles tool calls
 func (s *ChatSession) ChatWithTools(ctx context.Context, providerName string, messages []Message) (string, error) {
+	providerName = s.resolveProvider(providerName)
 	if s.supportsNativeTools(providerName) {
 		log.Printf("[ai] chat with native tools provider=%s messages=%d", providerName, len(messages))
 		messages = s.PrepareMessages(messages)
@@ -323,6 +333,7 @@ func (s *ChatSession) chatWithNativeTools(ctx context.Context, providerName stri
 
 // StreamChatWithTools streams a chat response with tool support
 func (s *ChatSession) StreamChatWithTools(ctx context.Context, providerName string, messages []Message, ch chan<- string) error {
+	providerName = s.resolveProvider(providerName)
 	// For streaming with tools, we need special handling
 	if s.supportsNativeTools(providerName) {
 		// Prepare messages with standard system prompt

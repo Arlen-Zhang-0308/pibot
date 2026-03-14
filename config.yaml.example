@@ -2,7 +2,7 @@ server:
     host: 0.0.0.0
     port: 8080
 ai:
-    default_provider: ollama
+    default_provider: qwen
     openai:
         api_key: ""
         model: gpt-4o

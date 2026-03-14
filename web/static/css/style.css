@@ -949,3 +949,409 @@ body {
     60% { content: '..'; }
     80%, 100% { content: '...'; }
 }
+
+/* ── Scheduled Tasks ─────────────────────────────────────────────────── */
+.tasks-page {
+    padding: 32px;
+    overflow-y: auto;
+}
+
+.tasks-container {
+    max-width: 1100px;
+    margin: 0 auto;
+}
+
+.tasks-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 28px;
+}
+
+.tasks-header h1 {
+    font-size: 1.5rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+/* Empty state */
+.tasks-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    padding: 80px 32px;
+    color: var(--text-muted);
+    text-align: center;
+}
+
+.tasks-empty svg {
+    width: 56px;
+    height: 56px;
+    opacity: 0.4;
+}
+
+.tasks-empty p {
+    font-size: 1rem;
+    color: var(--text-secondary);
+}
+
+/* Table */
+.tasks-table-wrapper {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+}
+
+.tasks-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.875rem;
+}
+
+.tasks-table thead tr {
+    background: var(--bg-tertiary);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.tasks-table th {
+    padding: 12px 16px;
+    text-align: left;
+    font-weight: 600;
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.tasks-table tbody tr {
+    border-bottom: 1px solid var(--border-color);
+    transition: background var(--transition-fast);
+}
+
+.tasks-table tbody tr:last-child {
+    border-bottom: none;
+}
+
+.tasks-table tbody tr:hover {
+    background: var(--bg-hover);
+}
+
+.tasks-table td {
+    padding: 12px 16px;
+    vertical-align: middle;
+}
+
+.task-name {
+    font-weight: 500;
+    color: var(--text-primary);
+}
+
+.task-schedule code {
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    background: var(--bg-tertiary);
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+    color: var(--accent-cyan);
+}
+
+.task-time {
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+}
+
+/* Action type badge */
+.task-type-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: var(--radius-sm);
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.task-type-badge.shell {
+    background: rgba(88, 166, 255, 0.15);
+    color: var(--accent-primary);
+    border: 1px solid rgba(88, 166, 255, 0.3);
+}
+
+.task-type-badge.ai {
+    background: rgba(163, 113, 247, 0.15);
+    color: var(--accent-purple);
+    border: 1px solid rgba(163, 113, 247, 0.3);
+}
+
+/* Row actions */
+.task-actions {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+}
+
+.btn-danger-icon {
+    color: var(--accent-danger) !important;
+}
+
+.btn-danger-icon:hover {
+    background: rgba(248, 81, 73, 0.15) !important;
+}
+
+/* Toggle switch */
+.toggle {
+    position: relative;
+    display: inline-block;
+    width: 38px;
+    height: 22px;
+    cursor: pointer;
+}
+
+.toggle input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+    position: absolute;
+}
+
+.toggle-slider {
+    position: absolute;
+    inset: 0;
+    background: var(--bg-hover);
+    border-radius: 22px;
+    transition: background var(--transition-fast);
+}
+
+.toggle-slider::before {
+    content: '';
+    position: absolute;
+    width: 16px;
+    height: 16px;
+    left: 3px;
+    top: 3px;
+    background: var(--text-secondary);
+    border-radius: 50%;
+    transition: transform var(--transition-fast), background var(--transition-fast);
+}
+
+.toggle input:checked + .toggle-slider {
+    background: rgba(63, 185, 80, 0.3);
+}
+
+.toggle input:checked + .toggle-slider::before {
+    transform: translateX(16px);
+    background: var(--accent-secondary);
+}
+
+/* Task Modal */
+.task-modal-content {
+    max-width: 540px;
+    width: 100%;
+}
+
+.task-modal-content textarea {
+    width: 100%;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    padding: 10px 12px;
+    resize: vertical;
+    transition: border-color var(--transition-fast);
+}
+
+.task-modal-content textarea:focus {
+    outline: none;
+    border-color: var(--accent-primary);
+}
+
+.form-hint {
+    display: block;
+    margin-top: 6px;
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    line-height: 1.5;
+}
+
+.form-hint code {
+    font-family: var(--font-mono);
+    background: var(--bg-tertiary);
+    padding: 1px 4px;
+    border-radius: 3px;
+    color: var(--accent-cyan);
+}
+
+.form-group-inline {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.form-group-inline label:first-child {
+    flex: 1;
+    margin-bottom: 0;
+}
+
+.task-modal-error {
+    color: var(--accent-danger);
+    font-size: 0.85rem;
+    padding: 8px 12px;
+    background: rgba(248, 81, 73, 0.1);
+    border-radius: var(--radius-sm);
+    border: 1px solid rgba(248, 81, 73, 0.3);
+    margin-bottom: 4px;
+}
+
+/* History Drawer */
+.drawer-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    z-index: 200;
+    display: flex;
+    justify-content: flex-end;
+}
+
+.drawer {
+    width: 480px;
+    max-width: 95vw;
+    background: var(--bg-secondary);
+    border-left: 1px solid var(--border-color);
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    box-shadow: var(--shadow-lg);
+    animation: slideIn 0.2s ease;
+}
+
+@keyframes slideIn {
+    from { transform: translateX(100%); }
+    to   { transform: translateX(0); }
+}
+
+.drawer-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 20px 24px;
+    border-bottom: 1px solid var(--border-color);
+    flex-shrink: 0;
+}
+
+.drawer-header h3 {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.drawer-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.history-empty {
+    text-align: center;
+    color: var(--text-muted);
+    padding: 40px;
+}
+
+.history-record {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+}
+
+.history-record.success {
+    border-left: 3px solid var(--accent-secondary);
+}
+
+.history-record.failure {
+    border-left: 3px solid var(--accent-danger);
+}
+
+.history-record-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 14px;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border-color);
+    font-size: 0.8rem;
+}
+
+.history-status {
+    font-weight: 600;
+}
+
+.history-record.success .history-status {
+    color: var(--accent-secondary);
+}
+
+.history-record.failure .history-status {
+    color: var(--accent-danger);
+}
+
+.history-time {
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+}
+
+.history-duration {
+    margin-left: auto;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+}
+
+.history-output,
+.history-error {
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    padding: 12px 14px;
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 200px;
+    overflow-y: auto;
+    margin: 0;
+}
+
+.history-output {
+    color: var(--text-primary);
+}
+
+.history-error {
+    color: var(--accent-danger);
+}
+
+@media (max-width: 768px) {
+    .tasks-page {
+        padding: 16px;
+    }
+
+    .tasks-header h1 {
+        font-size: 1.2rem;
+    }
+
+    .tasks-table th:nth-child(4),
+    .tasks-table td:nth-child(4),
+    .tasks-table th:nth-child(5),
+    .tasks-table td:nth-child(5) {
+        display: none;
+    }
+
+    .drawer {
+        width: 100vw;
+    }
+}

@@ -16,6 +16,7 @@ import (
 	"github.com/pibot/pibot/internal/config"
 	"github.com/pibot/pibot/internal/executor"
 	"github.com/pibot/pibot/internal/fileops"
+	"github.com/pibot/pibot/internal/scheduler"
 )
 
 func main() {
@@ -51,14 +52,22 @@ func main() {
 	}
 	log.Printf("File operations base directory: %s", fileOps.GetBaseDirectory())
 
-	// Create API server
-	server := api.NewServer(cfg, aiManager, exec, fileOps)
+	// Initialize scheduler (chat session wired inside api.NewServer)
+	sched := scheduler.NewScheduler(exec)
+
+	// Create API server (also wires chat session into the scheduler)
+	server := api.NewServer(cfg, aiManager, exec, fileOps, sched)
 	server.StartWebSocketHub()
+
+	// Start scheduler with a cancellable context
+	schedCtx, schedCancel := context.WithCancel(context.Background())
+	defer schedCancel()
+	go sched.Start(schedCtx)
 
 	// Configure HTTP server
 	serverCfg := cfg.GetServer()
 	addr := fmt.Sprintf("%s:%d", serverCfg.Host, serverCfg.Port)
-	
+
 	httpServer := &http.Server{
 		Addr:         addr,
 		Handler:      server.Handler(),
@@ -81,6 +90,9 @@ func main() {
 	<-quit
 
 	log.Println("Shutting down server...")
+
+	// Stop scheduler first
+	schedCancel()
 
 	// Graceful shutdown
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

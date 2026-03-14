@@ -401,6 +401,186 @@ createApp({
             setTimeout(() => { saveStatusMsg.value = ''; }, 5000);
         }
 
+        // ── Scheduled Tasks ───────────────────────────────────────────────
+        const tasks = ref([]);
+
+        const taskForm = reactive({
+            name: '',
+            action_type: 'shell',
+            command: '',
+            schedule: '',
+            enabled: true,
+        });
+
+        const taskModal = reactive({
+            visible: false,
+            isEdit: false,
+            editId: null,
+            error: '',
+        });
+
+        const historyDrawer = reactive({
+            visible: false,
+            taskName: '',
+            taskId: null,
+            records: [],
+        });
+
+        async function loadTasks() {
+            try {
+                const resp = await fetch('/api/tasks');
+                tasks.value = await resp.json() || [];
+            } catch (err) {
+                console.error('Failed to load tasks:', err);
+            }
+        }
+
+        function switchToTasks() {
+            currentView.value = 'tasks';
+            loadTasks();
+        }
+
+        function openNewTaskModal() {
+            taskForm.name = '';
+            taskForm.action_type = 'shell';
+            taskForm.command = '';
+            taskForm.schedule = '';
+            taskForm.enabled = true;
+            taskModal.isEdit = false;
+            taskModal.editId = null;
+            taskModal.error = '';
+            taskModal.visible = true;
+        }
+
+        function openEditTaskModal(task) {
+            taskForm.name = task.name;
+            taskForm.action_type = task.action_type;
+            taskForm.command = task.command;
+            taskForm.schedule = task.schedule;
+            taskForm.enabled = task.enabled;
+            taskModal.isEdit = true;
+            taskModal.editId = task.id;
+            taskModal.error = '';
+            taskModal.visible = true;
+        }
+
+        function closeTaskModal() {
+            taskModal.visible = false;
+        }
+
+        async function saveTask() {
+            taskModal.error = '';
+            const payload = {
+                name: taskForm.name,
+                action_type: taskForm.action_type,
+                command: taskForm.command,
+                schedule: taskForm.schedule,
+                enabled: taskForm.enabled,
+            };
+
+            try {
+                let resp;
+                if (taskModal.isEdit) {
+                    resp = await fetch(`/api/tasks/${taskModal.editId}`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload),
+                    });
+                } else {
+                    resp = await fetch('/api/tasks', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload),
+                    });
+                }
+
+                if (resp.ok) {
+                    taskModal.visible = false;
+                    await loadTasks();
+                } else {
+                    const err = await resp.json();
+                    taskModal.error = err.error || 'Unknown error';
+                }
+            } catch (err) {
+                taskModal.error = String(err);
+            }
+        }
+
+        async function deleteTask(task) {
+            if (!confirm(`Delete task "${task.name}"?`)) return;
+            try {
+                await fetch(`/api/tasks/${task.id}`, { method: 'DELETE' });
+                await loadTasks();
+            } catch (err) {
+                console.error('Failed to delete task:', err);
+            }
+        }
+
+        async function toggleTask(task) {
+            try {
+                await fetch(`/api/tasks/${task.id}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        name: task.name,
+                        action_type: task.action_type,
+                        command: task.command,
+                        schedule: task.schedule,
+                        enabled: !task.enabled,
+                    }),
+                });
+                await loadTasks();
+            } catch (err) {
+                console.error('Failed to toggle task:', err);
+            }
+        }
+
+        async function runTaskNow(task) {
+            try {
+                await fetch(`/api/tasks/${task.id}/run`, { method: 'POST' });
+                // Refresh after a short delay to pick up the new run record
+                setTimeout(async () => {
+                    await loadTasks();
+                    if (historyDrawer.visible && historyDrawer.taskId === task.id) {
+                        await loadTaskHistory(task.id, task.name);
+                    }
+                }, 2000);
+            } catch (err) {
+                console.error('Failed to run task:', err);
+            }
+        }
+
+        async function loadTaskHistory(taskId, taskName) {
+            try {
+                const resp = await fetch(`/api/tasks/${taskId}/history`);
+                const records = await resp.json() || [];
+                historyDrawer.records = records.slice().reverse(); // newest first
+                historyDrawer.taskId = taskId;
+                historyDrawer.taskName = taskName;
+            } catch (err) {
+                console.error('Failed to load task history:', err);
+            }
+        }
+
+        async function openTaskHistory(task) {
+            historyDrawer.records = [];
+            historyDrawer.taskName = task.name;
+            historyDrawer.taskId = task.id;
+            historyDrawer.visible = true;
+            await loadTaskHistory(task.id, task.name);
+        }
+
+        function closeHistoryDrawer() {
+            historyDrawer.visible = false;
+        }
+
+        function formatTaskTime(isoStr) {
+            if (!isoStr) return '—';
+            const d = new Date(isoStr);
+            if (isNaN(d)) return isoStr;
+            return d.toLocaleString();
+        }
+
         // ── Init ──────────────────────────────────────────────────────────
         onMounted(() => {
             setupWebSocket();
@@ -445,6 +625,22 @@ createApp({
             saveStatusMsg,
             saveStatusError,
             saveSettings,
+            // tasks
+            tasks,
+            taskForm,
+            taskModal,
+            historyDrawer,
+            switchToTasks,
+            openNewTaskModal,
+            openEditTaskModal,
+            closeTaskModal,
+            saveTask,
+            deleteTask,
+            toggleTask,
+            runTaskNow,
+            openTaskHistory,
+            closeHistoryDrawer,
+            formatTaskTime,
         };
     }
 }).mount('#app');
