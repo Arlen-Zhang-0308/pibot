@@ -7,60 +7,54 @@ import (
 	"github.com/pibot/pibot/internal/config"
 )
 
-// AnthropicProvider implements the Provider interface for Anthropic
+// AnthropicProvider implements the Provider interface for Anthropic.
 type AnthropicProvider struct {
 	config *config.Config
 	client *anthropic.Client
 }
 
-// NewAnthropicProvider creates a new Anthropic provider
+// NewAnthropicProvider creates a new Anthropic provider.
 func NewAnthropicProvider(cfg *config.Config) *AnthropicProvider {
 	aiCfg := cfg.GetAI()
-	var client *anthropic.Client
+	p := &AnthropicProvider{config: cfg}
 	if aiCfg.Anthropic.APIKey != "" {
-		client = anthropic.NewClient(aiCfg.Anthropic.APIKey)
+		p.client = anthropic.NewClient(aiCfg.Anthropic.APIKey)
 	}
-	return &AnthropicProvider{
-		config: cfg,
-		client: client,
-	}
+	return p
 }
 
-// Name returns the provider name
+// Name returns the provider name.
 func (p *AnthropicProvider) Name() string {
 	return "anthropic"
 }
 
-// Chat sends messages and returns a complete response
+// Chat sends messages and returns a complete response.
 func (p *AnthropicProvider) Chat(ctx context.Context, messages []Message) (string, error) {
 	if p.client == nil {
 		return "", ErrProviderNotConfigured
 	}
 
 	aiCfg := p.config.GetAI()
-	anthropicMessages := convertToAnthropicMessages(messages)
 
 	resp, err := p.client.CreateMessages(ctx, anthropic.MessagesRequest{
 		Model:     anthropic.Model(aiCfg.Anthropic.Model),
 		MaxTokens: 4096,
-		Messages:  anthropicMessages,
+		Messages:  convertToAnthropicMessages(messages),
 	})
 	if err != nil {
 		return "", err
 	}
 
-	// Extract text from response
 	var result string
 	for _, block := range resp.Content {
 		if block.Type == anthropic.MessagesContentTypeText {
 			result += block.GetText()
 		}
 	}
-
 	return result, nil
 }
 
-// StreamChat sends messages and streams the response
+// StreamChat sends messages and streams the response.
 func (p *AnthropicProvider) StreamChat(ctx context.Context, messages []Message, ch chan<- string) error {
 	if p.client == nil {
 		return ErrProviderNotConfigured
@@ -69,13 +63,12 @@ func (p *AnthropicProvider) StreamChat(ctx context.Context, messages []Message, 
 	defer close(ch)
 
 	aiCfg := p.config.GetAI()
-	anthropicMessages := convertToAnthropicMessages(messages)
 
 	_, err := p.client.CreateMessagesStream(ctx, anthropic.MessagesStreamRequest{
 		MessagesRequest: anthropic.MessagesRequest{
 			Model:     anthropic.Model(aiCfg.Anthropic.Model),
 			MaxTokens: 4096,
-			Messages:  anthropicMessages,
+			Messages:  convertToAnthropicMessages(messages),
 		},
 		OnContentBlockDelta: func(data anthropic.MessagesEventContentBlockDeltaData) {
 			if data.Delta.Type == anthropic.MessagesContentTypeTextDelta && data.Delta.Text != nil {
@@ -83,15 +76,22 @@ func (p *AnthropicProvider) StreamChat(ctx context.Context, messages []Message, 
 			}
 		},
 	})
-
 	return err
 }
 
-// convertToAnthropicMessages converts internal messages to Anthropic format
+// RefreshClient updates the client when credentials change.
+func (p *AnthropicProvider) RefreshClient() {
+	aiCfg := p.config.GetAI()
+	if aiCfg.Anthropic.APIKey != "" {
+		p.client = anthropic.NewClient(aiCfg.Anthropic.APIKey)
+	}
+}
+
+// convertToAnthropicMessages converts internal messages to Anthropic format.
+// System messages are skipped — pass them via MessagesRequest.System instead.
 func convertToAnthropicMessages(messages []Message) []anthropic.Message {
 	result := make([]anthropic.Message, 0, len(messages))
 	for _, msg := range messages {
-		// Skip system messages as they're handled separately in Anthropic
 		if msg.Role == RoleSystem {
 			continue
 		}
@@ -107,12 +107,4 @@ func convertToAnthropicMessages(messages []Message) []anthropic.Message {
 		})
 	}
 	return result
-}
-
-// RefreshClient updates the client with new credentials
-func (p *AnthropicProvider) RefreshClient() {
-	aiCfg := p.config.GetAI()
-	if aiCfg.Anthropic.APIKey != "" {
-		p.client = anthropic.NewClient(aiCfg.Anthropic.APIKey)
-	}
 }

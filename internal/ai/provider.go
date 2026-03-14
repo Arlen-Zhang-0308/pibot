@@ -24,14 +24,20 @@ type Message struct {
 	Content string `json:"content"`
 }
 
-// Provider defines the interface for AI providers
+// Provider defines the interface for AI providers.
 type Provider interface {
-	// Name returns the provider name
+	// Name returns the provider name.
 	Name() string
-	// Chat sends messages and returns a complete response
+	// Chat sends messages and returns a complete response.
 	Chat(ctx context.Context, messages []Message) (string, error)
-	// StreamChat sends messages and streams the response
+	// StreamChat sends messages and streams the response token by token.
 	StreamChat(ctx context.Context, messages []Message, ch chan<- string) error
+}
+
+// Closer is an optional interface implemented by providers that hold
+// long-lived resources (e.g. network connections) that must be released.
+type Closer interface {
+	Close() error
 }
 
 // Manager manages multiple AI providers
