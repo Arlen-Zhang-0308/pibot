@@ -10,6 +10,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/pibot/pibot/internal/ai"
+	"github.com/pibot/pibot/internal/executor"
 )
 
 var upgrader = websocket.Upgrader{
@@ -22,26 +23,27 @@ var upgrader = websocket.Upgrader{
 
 // WebSocket message types
 const (
-	MsgTypeChat        = "chat"
-	MsgTypeExec        = "exec"
-	MsgTypeStream      = "stream"
-	MsgTypeStreamEnd   = "stream_end"
-	MsgTypeExecResult  = "exec_result"
-	MsgTypeError       = "error"
-	MsgTypePending     = "pending"
+	MsgTypeChat       = "chat"
+	MsgTypeExec       = "exec"
+	MsgTypeStream     = "stream"
+	MsgTypeStreamEnd  = "stream_end"
+	MsgTypeExecResult = "exec_result"
+	MsgTypeError      = "error"
+	MsgTypePending    = "pending"
 )
 
 // WSMessage represents a WebSocket message
 type WSMessage struct {
-	Type     string          `json:"type"`
-	ID       string          `json:"id,omitempty"`
-	Payload  json.RawMessage `json:"payload"`
+	Type    string          `json:"type"`
+	ID      string          `json:"id,omitempty"`
+	Payload json.RawMessage `json:"payload"`
 }
 
 // ChatPayload represents a chat message payload
 type ChatPayload struct {
-	Messages []ai.Message `json:"messages"`
-	Provider string       `json:"provider,omitempty"`
+	Messages    []ai.Message `json:"messages"`
+	Provider    string       `json:"provider,omitempty"`
+	AlwaysAllow bool         `json:"always_allow,omitempty"`
 }
 
 // ExecPayload represents a command execution payload
@@ -203,8 +205,22 @@ func (c *Client) handleChatMessage(msg WSMessage) {
 
 	// Create a channel for streaming
 	ch := make(chan string, 100)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	baseCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
+
+	// Propagate always-allow flag through context so Executor can skip pending flow.
+	ctx := context.WithValue(baseCtx, executor.AlwaysAllowKey, payload.AlwaysAllow)
+
+	// Inject a notify function so the Executor can push pending WS messages back to
+	// this client while blocking inside an AI tool call.
+	notifyFn := func(result *executor.ExecutionResult) {
+		c.sendMessage(WSMessage{
+			Type:    MsgTypePending,
+			ID:      msg.ID,
+			Payload: mustMarshal(result),
+		})
+	}
+	ctx = context.WithValue(ctx, executor.NotifyPendingKey, notifyFn)
 
 	// Determine provider
 	provider := payload.Provider

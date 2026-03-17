@@ -56,6 +56,11 @@ func (t *ExecuteCommandTool) Execute(ctx context.Context, params json.RawMessage
 
 	result, err := t.executor.Execute(ctx, p.Command)
 	if err != nil {
+		// Surface denial as a clear tool result so the AI understands the user
+		// explicitly refused — not a transient failure to retry.
+		if executor.IsDeniedError(err) {
+			return "USER DENIED EXECUTION: The user explicitly declined to run this command. Do NOT retry or ask again. Inform the user that the command was not executed because they denied it.", nil
+		}
 		return "", err
 	}
 

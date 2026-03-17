@@ -71,6 +71,11 @@ createApp({
         const chatMessagesEl = ref(null);
         const chatInputEl = ref(null);
         const currentProvider = ref('qwen');
+        const alwaysAllow = ref(false);
+
+        function toggleAlwaysAllow() {
+            alwaysAllow.value = !alwaysAllow.value;
+        }
 
         function scrollChatToBottom() {
             nextTick(() => {
@@ -115,7 +120,7 @@ createApp({
             ws.send(JSON.stringify({
                 type: 'chat',
                 id: msgId,
-                payload: { messages: history, provider: currentProvider.value }
+                payload: { messages: history, provider: currentProvider.value, always_allow: alwaysAllow.value }
             }));
         }
 
@@ -290,35 +295,45 @@ createApp({
             return `${size.toFixed(i > 0 ? 1 : 0)} ${units[i]}`;
         }
 
-        // ── Pending Command Modal ─────────────────────────────────────────
-        const pendingModal = reactive({ visible: false, command: '', pendingId: '' });
+        // ── Pending Command Panel ─────────────────────────────────────────
+        // Queue of pending commands; the panel shows the first item.
+        const pendingQueue = ref([]);
+        const pendingPanel = computed(() => pendingQueue.value.length > 0
+            ? pendingQueue.value[0]
+            : null);
 
         function handlePendingCommand(result) {
-            pendingModal.command = result.command;
-            pendingModal.pendingId = result.pending_id;
-            pendingModal.visible = true;
+            pendingQueue.value.push({ command: result.command, pendingId: result.pending_id, level: result.level });
+        }
+
+        function shiftPendingQueue() {
+            pendingQueue.value.shift();
         }
 
         async function confirmPendingCommand() {
+            if (!pendingPanel.value) return;
+            const { pendingId } = pendingPanel.value;
+            shiftPendingQueue();
             try {
-                const resp = await fetch(`/api/exec/confirm/${pendingModal.pendingId}`, { method: 'POST' });
+                const resp = await fetch(`/api/exec/confirm/${pendingId}`, { method: 'POST' });
                 const result = await resp.json();
                 addTerminalOutput(result);
             } catch (err) {
                 console.error('Failed to confirm command:', err);
             }
-            pendingModal.visible = false;
         }
 
         async function cancelPendingCommand() {
+            if (!pendingPanel.value) return;
+            const { pendingId } = pendingPanel.value;
+            shiftPendingQueue();
             try {
-                await fetch(`/api/exec/cancel/${pendingModal.pendingId}`, { method: 'POST' });
+                await fetch(`/api/exec/cancel/${pendingId}`, { method: 'POST' });
                 terminalLines.value.push({ type: 'success', content: 'Command cancelled' });
                 scrollTerminalToBottom();
             } catch (err) {
                 console.error('Failed to cancel command:', err);
             }
-            pendingModal.visible = false;
         }
 
         // ── Settings ──────────────────────────────────────────────────────
@@ -641,10 +656,14 @@ createApp({
             loadFiles,
             onFileClick,
             formatSize,
-            // pending modal
-            pendingModal,
+            // pending panel
+            pendingPanel,
+            pendingQueue,
             confirmPendingCommand,
             cancelPendingCommand,
+            // always-allow toggle
+            alwaysAllow,
+            toggleAlwaysAllow,
             // settings
             settingsForm,
             saveStatusMsg,

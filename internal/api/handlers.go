@@ -243,7 +243,7 @@ func (s *Server) handleReboot(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleListFiles(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Query().Get("path")
-	
+
 	files, err := s.fileOps.List(path)
 	if err != nil {
 		errorResponse(w, http.StatusBadRequest, err.Error())
@@ -251,7 +251,7 @@ func (s *Server) handleListFiles(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jsonResponse(w, http.StatusOK, map[string]interface{}{
-		"files":         files,
+		"files":          files,
 		"base_directory": s.fileOps.GetBaseDirectory(),
 	})
 }
@@ -259,10 +259,10 @@ func (s *Server) handleListFiles(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleReadFile(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	path := vars["path"]
-	
+
 	// Combine with base directory
 	fullPath := filepath.Join(s.fileOps.GetBaseDirectory(), path)
-	
+
 	content, err := s.fileOps.Read(fullPath)
 	if err != nil {
 		errorResponse(w, http.StatusBadRequest, err.Error())
@@ -283,7 +283,7 @@ type WriteFileRequest struct {
 func (s *Server) handleWriteFile(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	path := vars["path"]
-	
+
 	var req WriteFileRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		errorResponse(w, http.StatusBadRequest, "Invalid request body")
@@ -292,7 +292,7 @@ func (s *Server) handleWriteFile(w http.ResponseWriter, r *http.Request) {
 
 	// Combine with base directory
 	fullPath := filepath.Join(s.fileOps.GetBaseDirectory(), path)
-	
+
 	if err := s.fileOps.Write(fullPath, req.Content); err != nil {
 		errorResponse(w, http.StatusBadRequest, err.Error())
 		return
@@ -307,19 +307,19 @@ func (s *Server) handleWriteFile(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	path := vars["path"]
-	
+
 	// Combine with base directory
 	fullPath := filepath.Join(s.fileOps.GetBaseDirectory(), path)
-	
+
 	recursive := r.URL.Query().Get("recursive") == "true"
-	
+
 	var err error
 	if recursive {
 		err = s.fileOps.DeleteRecursive(fullPath)
 	} else {
 		err = s.fileOps.Delete(fullPath)
 	}
-	
+
 	if err != nil {
 		errorResponse(w, http.StatusBadRequest, err.Error())
 		return

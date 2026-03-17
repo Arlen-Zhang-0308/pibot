@@ -154,6 +154,24 @@
                             </div>
                         </div>
                         <div class="chat-input-area">
+                            <!-- Floating pending command panel -->
+                            <div class="pending-panel" v-if="pendingPanel">
+                                <div class="pending-panel-header">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="pending-panel-icon">
+                                        <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                                        <line x1="12" y1="9" x2="12" y2="13"/>
+                                        <line x1="12" y1="17" x2="12.01" y2="17"/>
+                                    </svg>
+                                    <span class="pending-panel-title">Command requires confirmation</span>
+                                    <span class="pending-panel-level" :class="'level-' + pendingPanel.level">{{ pendingPanel.level }}</span>
+                                    <span class="pending-panel-queue" v-if="pendingQueue.length > 1">+{{ pendingQueue.length - 1 }} more</span>
+                                </div>
+                                <pre class="pending-panel-command">{{ pendingPanel.command }}</pre>
+                                <div class="pending-panel-actions">
+                                    <button class="btn btn-secondary" @click="cancelPendingCommand">Deny</button>
+                                    <button class="btn btn-danger" @click="confirmPendingCommand">Allow</button>
+                                </div>
+                            </div>
                             <form @submit.prevent="sendChatMessage" class="chat-form">
                                 <div class="input-wrapper" :class="{ focused: chatFocused }">
                                     <textarea
@@ -166,6 +184,17 @@
                                         @focus="chatFocused = true"
                                         @blur="chatFocused = false"
                                     ></textarea>
+                                    <button
+                                        type="button"
+                                        class="always-allow-btn"
+                                        :class="{ active: alwaysAllow }"
+                                        @click="toggleAlwaysAllow"
+                                        :title="alwaysAllow ? 'Always Allow ON — all commands execute without confirmation' : 'Always Allow OFF — dangerous commands will ask for confirmation'"
+                                    >
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                                        </svg>
+                                    </button>
                                     <button type="submit" class="send-btn" :class="{ active: chatInput.trim() && wsConnected }" :disabled="!chatInput.trim() || !wsConnected">
                                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                             <line x1="22" y1="2" x2="11" y2="13"/>
@@ -468,20 +497,6 @@
                 </section>
 
             </main>
-        </div>
-
-        <!-- Pending Command Modal -->
-        <div class="modal" v-if="pendingModal.visible">
-            <div class="modal-content">
-                <h3>Command Requires Confirmation</h3>
-                <p>The following command has been classified as potentially dangerous:</p>
-                <pre>{{ pendingModal.command }}</pre>
-                <p class="warning">Are you sure you want to execute this command?</p>
-                <div class="modal-actions">
-                    <button class="btn btn-secondary" @click="cancelPendingCommand">Cancel</button>
-                    <button class="btn btn-danger" @click="confirmPendingCommand">Execute</button>
-                </div>
-            </div>
         </div>
 
         <!-- Task Create/Edit Modal -->

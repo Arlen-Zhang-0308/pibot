@@ -67,25 +67,20 @@ func (s *Sandbox) ClassifyCommand(command string) CommandLevel {
 	}
 	baseCmd := parts[0]
 	
-	// Check for blocked commands first
+	// Check for blocked commands first (base command name only)
 	for _, blocked := range execCfg.BlockedCommands {
-		if baseCmd == blocked || strings.Contains(command, blocked) {
+		if baseCmd == blocked {
 			return LevelBlocked
 		}
 	}
 	
-	// Check dangerous commands
+	// Check dangerous commands (base command name only)
 	for _, dangerous := range execCfg.DangerousCommands {
 		if baseCmd == dangerous {
 			return LevelDangerous
 		}
 	}
-	
-	// Check for dangerous patterns
-	if containsDangerousPattern(command) {
-		return LevelDangerous
-	}
-	
+
 	// Check moderate commands
 	for _, moderate := range execCfg.ModerateCommands {
 		if baseCmd == moderate {
@@ -101,27 +96,6 @@ func (s *Sandbox) ClassifyCommand(command string) CommandLevel {
 	}
 	
 	return LevelUnknown
-}
-
-// containsDangerousPattern checks for dangerous command patterns
-func containsDangerousPattern(command string) bool {
-	patterns := []string{
-		"rm -rf",
-		"rm -fr",
-		"> /dev/",
-		"| sudo",
-		"&& sudo",
-		"; sudo",
-		"chmod 777",
-		":(){ :|:& };:",
-	}
-	
-	for _, pattern := range patterns {
-		if strings.Contains(command, pattern) {
-			return true
-		}
-	}
-	return false
 }
 
 // AddPending adds a command to the pending list
