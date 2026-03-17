@@ -10,6 +10,7 @@ import (
 	"github.com/pibot/pibot/internal/config"
 	"github.com/pibot/pibot/internal/executor"
 	"github.com/pibot/pibot/internal/fileops"
+	"github.com/pibot/pibot/internal/reboot"
 	"github.com/pibot/pibot/internal/scheduler"
 	"github.com/pibot/pibot/internal/skills"
 	"github.com/pibot/pibot/internal/tools"
@@ -24,6 +25,7 @@ type Server struct {
 	fileOps      *fileops.FileOps
 	capabilities *capabilities.Registry
 	scheduler    *scheduler.Scheduler
+	reboter      *reboot.Reboter
 	wsHub        *Hub
 	router       *mux.Router
 }
@@ -33,8 +35,11 @@ func NewServer(cfg *config.Config, aiMgr *ai.Manager, exec *executor.Executor, f
 	// Create unified capabilities registry
 	reg := capabilities.NewRegistry()
 
+	// Create reboter
+	reboter := reboot.New(cfg)
+
 	// Register built-in Go tools
-	tools.RegisterAll(reg, exec, fops)
+	tools.RegisterAll(reg, exec, fops, reboter)
 
 	// Load external skills from ~/.pibot_skills
 	skillsPath := cfg.GetSkillsPath()
@@ -58,6 +63,7 @@ func NewServer(cfg *config.Config, aiMgr *ai.Manager, exec *executor.Executor, f
 		fileOps:      fops,
 		capabilities: reg,
 		scheduler:    sched,
+		reboter:      reboter,
 		wsHub:        NewHub(),
 		router:       mux.NewRouter(),
 	}
@@ -93,6 +99,9 @@ func (s *Server) setupRoutes() {
 	api.HandleFunc("/files/{path:.*}", s.handleReadFile).Methods("GET")
 	api.HandleFunc("/files/{path:.*}", s.handleWriteFile).Methods("POST")
 	api.HandleFunc("/files/{path:.*}", s.handleDeleteFile).Methods("DELETE")
+
+	// Reboot endpoint
+	api.HandleFunc("/reboot", s.handleReboot).Methods("POST")
 
 	// Scheduled task endpoints
 	api.HandleFunc("/tasks", s.handleListTasks).Methods("GET")

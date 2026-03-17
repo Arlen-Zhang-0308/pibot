@@ -195,6 +195,40 @@ body {
     outline: none;
 }
 
+.btn-reboot {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 12px;
+    width: 100%;
+    padding: 8px 12px;
+    background: transparent;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    font-family: var(--font-sans);
+    font-size: 0.875rem;
+    cursor: pointer;
+    transition: border-color var(--transition-fast), color var(--transition-fast), background var(--transition-fast);
+}
+
+.btn-reboot svg {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+}
+
+.btn-reboot:hover:not(:disabled) {
+    border-color: var(--accent-danger, #ef4444);
+    color: var(--accent-danger, #ef4444);
+    background: rgba(239, 68, 68, 0.08);
+}
+
+.btn-reboot:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
 /* Main Content */
 .main-content {
     flex: 1;

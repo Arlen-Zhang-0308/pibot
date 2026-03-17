@@ -218,6 +218,27 @@ func (s *Server) handleListPending(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, http.StatusOK, map[string]interface{}{"pending": pending})
 }
 
+// RebootRequest represents an optional reboot request body.
+type RebootRequest struct {
+	Reason string `json:"reason,omitempty"`
+}
+
+func (s *Server) handleReboot(w http.ResponseWriter, r *http.Request) {
+	var req RebootRequest
+	// Body is optional — ignore decode errors for empty bodies.
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	log.Printf("[api] reboot requested from %s reason=%q", r.RemoteAddr, req.Reason)
+
+	if err := s.reboter.Execute(req.Reason); err != nil {
+		log.Printf("[api] reboot ERROR: %v", err)
+		errorResponse(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]string{"status": "rebooting"})
+}
+
 // File operation handlers
 
 func (s *Server) handleListFiles(w http.ResponseWriter, r *http.Request) {

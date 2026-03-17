@@ -4,6 +4,7 @@ import (
 	"github.com/pibot/pibot/internal/capabilities"
 	"github.com/pibot/pibot/internal/executor"
 	"github.com/pibot/pibot/internal/fileops"
+	"github.com/pibot/pibot/internal/reboot"
 )
 
 // Tool defines the interface for a built-in Go tool.
@@ -14,7 +15,7 @@ type Tool interface {
 }
 
 // RegisterAll registers every built-in tool into the capabilities registry.
-func RegisterAll(reg *capabilities.Registry, exec *executor.Executor, fops *fileops.FileOps) {
+func RegisterAll(reg *capabilities.Registry, exec *executor.Executor, fops *fileops.FileOps, reboter *reboot.Reboter) {
 	for _, t := range []Tool{
 		NewExecuteCommandTool(exec),
 		NewReadFileTool(fops),
@@ -22,6 +23,7 @@ func RegisterAll(reg *capabilities.Registry, exec *executor.Executor, fops *file
 		NewListDirectoryTool(fops),
 		NewSystemInfoTool(fops),
 		NewWebSearchTool(),
+		NewRebootTool(reboter),
 	} {
 		reg.Register(t, capabilities.KindTool)
 	}

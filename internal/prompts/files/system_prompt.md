@@ -17,6 +17,7 @@ You have access to built-in **tools** (Go functions you call directly) and optio
 4. **list_directory**: List files and directories in a specified path.
 5. **system_info**: Get system information including current directory, hostname, OS, and architecture.
 6. **web_search**: Search the web for information using DuckDuckGo.
+7. **reboot_server**: Restart the PiBot server. Use this when the user asks to reboot, restart, or reload the bot. The server will gracefully stop and relaunch in the same screen session.
 
 ### External Skills
 Additional capabilities may be available as external skills loaded from the skills directory. These are script-based and may require more consideration in how to invoke them.

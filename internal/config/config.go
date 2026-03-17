@@ -16,8 +16,31 @@ type Config struct {
 	FileOps    FileOpsConfig  `yaml:"fileops"`
 	Prompts    PromptsConfig  `yaml:"prompts"`
 	SkillsPath string         `yaml:"skills_path"`
+	Reboot     RebootConfig   `yaml:"reboot"`
 	mu         sync.RWMutex   `yaml:"-"`
 	configPath string         `yaml:"-"`
+}
+
+// RebootConfig holds settings for how the bot restarts itself.
+type RebootConfig struct {
+	// Plan selects which reboot strategy to use.
+	// Built-in plans:
+	//   "screen" (default) – kills the current process; the wrapper script
+	//                        re-launches the server inside the same screen session.
+	Plan string `yaml:"plan"`
+
+	// Screen plan options
+	Screen ScreenRebootConfig `yaml:"screen"`
+}
+
+// ScreenRebootConfig contains parameters for the "screen" reboot plan.
+type ScreenRebootConfig struct {
+	// SessionName is the screen session that hosts the server (default: "pibot").
+	SessionName string `yaml:"session_name"`
+	// WorkDir is the directory to cd into before starting the server.
+	WorkDir string `yaml:"work_dir"`
+	// StartCommand is the command used to launch the server.
+	StartCommand string `yaml:"start_command"`
 }
 
 // ServerConfig holds HTTP server settings
@@ -134,6 +157,14 @@ func DefaultConfig() *Config {
 			EnableTools: true,
 		},
 		SkillsPath: "~/.pibot_skills",
+		Reboot: RebootConfig{
+			Plan: "screen",
+			Screen: ScreenRebootConfig{
+				SessionName:  "pibot",
+				WorkDir:      "/home/orangepi/workspace/pibot",
+				StartCommand: "go run cmd/server/main.go",
+			},
+		},
 	}
 }
 
@@ -215,6 +246,13 @@ func (c *Config) GetPrompts() PromptsConfig {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.Prompts
+}
+
+// GetReboot returns the reboot configuration (thread-safe).
+func (c *Config) GetReboot() RebootConfig {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.Reboot
 }
 
 // GetSkillsPath returns the path to the external skills directory (thread-safe).

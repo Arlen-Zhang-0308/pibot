@@ -581,6 +581,31 @@ createApp({
             return d.toLocaleString();
         }
 
+        // ── Reboot ────────────────────────────────────────────────────────
+        const rebootStatus = ref(''); // '', 'rebooting', 'error'
+
+        async function rebootServer() {
+            if (!confirm('Reboot PiBot server? The server will restart momentarily.')) return;
+            rebootStatus.value = 'rebooting';
+            try {
+                const resp = await fetch('/api/reboot', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ reason: 'user requested via web UI' }),
+                });
+                if (!resp.ok) {
+                    const err = await resp.json();
+                    alert('Reboot failed: ' + (err.error || 'Unknown error'));
+                    rebootStatus.value = 'error';
+                    return;
+                }
+                // Server is going down — show banner and wait for reconnection
+                wsConnected.value = false;
+            } catch (err) {
+                // Network error is expected once the server exits
+            }
+        }
+
         // ── Init ──────────────────────────────────────────────────────────
         onMounted(() => {
             setupWebSocket();
@@ -641,6 +666,9 @@ createApp({
             openTaskHistory,
             closeHistoryDrawer,
             formatTaskTime,
+            // reboot
+            rebootServer,
+            rebootStatus,
         };
     }
 }).mount('#app');
