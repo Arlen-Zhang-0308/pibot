@@ -1,4 +1,4 @@
-package skills
+package tools
 
 import (
 	"context"
@@ -9,35 +9,30 @@ import (
 	"github.com/pibot/pibot/internal/fileops"
 )
 
-// ListDirectoryParams represents parameters for the list_directory skill
+// ListDirectoryParams represents parameters for the list_directory tool.
 type ListDirectoryParams struct {
 	Path string `json:"path"`
 }
 
-// ListDirectorySkill lists directory contents
-type ListDirectorySkill struct {
+// ListDirectoryTool lists directory contents.
+type ListDirectoryTool struct {
 	fileOps *fileops.FileOps
 }
 
-// NewListDirectorySkill creates a new list_directory skill
-func NewListDirectorySkill(fops *fileops.FileOps) *ListDirectorySkill {
-	return &ListDirectorySkill{
+// NewListDirectoryTool creates a new list_directory tool.
+func NewListDirectoryTool(fops *fileops.FileOps) *ListDirectoryTool {
+	return &ListDirectoryTool{
 		fileOps: fops,
 	}
 }
 
-// Name returns the skill name
-func (s *ListDirectorySkill) Name() string {
-	return "list_directory"
-}
+func (t *ListDirectoryTool) Name() string { return "list_directory" }
 
-// Description returns the skill description
-func (s *ListDirectorySkill) Description() string {
+func (t *ListDirectoryTool) Description() string {
 	return "List the contents of a directory. Returns file and directory names with their sizes and modification times. If no path is provided, lists the workspace base directory."
 }
 
-// Parameters returns the JSON schema for the skill parameters
-func (s *ListDirectorySkill) Parameters() map[string]interface{} {
+func (t *ListDirectoryTool) Parameters() map[string]interface{} {
 	return map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
@@ -50,14 +45,13 @@ func (s *ListDirectorySkill) Parameters() map[string]interface{} {
 	}
 }
 
-// Execute lists the directory
-func (s *ListDirectorySkill) Execute(ctx context.Context, params json.RawMessage) (string, error) {
+func (t *ListDirectoryTool) Execute(ctx context.Context, params json.RawMessage) (string, error) {
 	var p ListDirectoryParams
 	if err := json.Unmarshal(params, &p); err != nil {
 		return "", fmt.Errorf("invalid parameters: %w", err)
 	}
 
-	files, err := s.fileOps.List(p.Path)
+	files, err := t.fileOps.List(p.Path)
 	if err != nil {
 		return "", err
 	}
@@ -78,7 +72,6 @@ func (s *ListDirectorySkill) Execute(ctx context.Context, params json.RawMessage
 	return strings.Join(lines, "\n"), nil
 }
 
-// formatSize formats a file size in human-readable format
 func formatSize(bytes int64) string {
 	const unit = 1024
 	if bytes < unit {

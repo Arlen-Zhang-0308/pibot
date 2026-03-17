@@ -1,4 +1,4 @@
-package skills
+package tools
 
 import (
 	"context"
@@ -8,36 +8,31 @@ import (
 	"github.com/pibot/pibot/internal/fileops"
 )
 
-// WriteFileParams represents parameters for the write_file skill
+// WriteFileParams represents parameters for the write_file tool.
 type WriteFileParams struct {
 	Path    string `json:"path"`
 	Content string `json:"content"`
 }
 
-// WriteFileSkill writes content to a file
-type WriteFileSkill struct {
+// WriteFileTool writes content to a file.
+type WriteFileTool struct {
 	fileOps *fileops.FileOps
 }
 
-// NewWriteFileSkill creates a new write_file skill
-func NewWriteFileSkill(fops *fileops.FileOps) *WriteFileSkill {
-	return &WriteFileSkill{
+// NewWriteFileTool creates a new write_file tool.
+func NewWriteFileTool(fops *fileops.FileOps) *WriteFileTool {
+	return &WriteFileTool{
 		fileOps: fops,
 	}
 }
 
-// Name returns the skill name
-func (s *WriteFileSkill) Name() string {
-	return "write_file"
-}
+func (t *WriteFileTool) Name() string { return "write_file" }
 
-// Description returns the skill description
-func (s *WriteFileSkill) Description() string {
+func (t *WriteFileTool) Description() string {
 	return "Write content to a file. Creates the file if it doesn't exist, or overwrites if it does. The path can be relative to the workspace base directory or an absolute path within allowed directories."
 }
 
-// Parameters returns the JSON schema for the skill parameters
-func (s *WriteFileSkill) Parameters() map[string]interface{} {
+func (t *WriteFileTool) Parameters() map[string]interface{} {
 	return map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
@@ -54,8 +49,7 @@ func (s *WriteFileSkill) Parameters() map[string]interface{} {
 	}
 }
 
-// Execute writes to the file
-func (s *WriteFileSkill) Execute(ctx context.Context, params json.RawMessage) (string, error) {
+func (t *WriteFileTool) Execute(ctx context.Context, params json.RawMessage) (string, error) {
 	var p WriteFileParams
 	if err := json.Unmarshal(params, &p); err != nil {
 		return "", fmt.Errorf("invalid parameters: %w", err)
@@ -65,7 +59,7 @@ func (s *WriteFileSkill) Execute(ctx context.Context, params json.RawMessage) (s
 		return "", fmt.Errorf("path is required")
 	}
 
-	if err := s.fileOps.Write(p.Path, p.Content); err != nil {
+	if err := t.fileOps.Write(p.Path, p.Content); err != nil {
 		return "", err
 	}
 

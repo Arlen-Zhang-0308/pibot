@@ -6,7 +6,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/pibot/pibot/internal/skills"
+	"github.com/pibot/pibot/internal/capabilities"
 )
 
 // ActionBlock represents a parsed action from the AI response
@@ -111,7 +111,7 @@ func RemoveActions(text string) string {
 }
 
 // ExecuteAction executes a single action using the skill registry
-func ExecuteAction(ctx context.Context, registry *skills.Registry, action ActionBlock) (string, error) {
+func ExecuteAction(ctx context.Context, registry *capabilities.Registry, action ActionBlock) (string, error) {
 	// Convert parameters to JSON for the skill
 	var args json.RawMessage
 	var err error

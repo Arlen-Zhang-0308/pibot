@@ -12,14 +12,14 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/pibot/pibot/internal/capabilities"
 	"github.com/pibot/pibot/internal/config"
 	"github.com/pibot/pibot/internal/prompts"
-	"github.com/pibot/pibot/internal/skills"
 	openai "github.com/sashabaranov/go-openai"
 )
 
 // MaxToolIterations limits the number of tool call iterations to prevent infinite loops
-const MaxToolIterations = 10
+const MaxToolIterations = 50
 
 // MaxPromptToolIterations limits iterations for prompt-based tools
 const MaxPromptToolIterations = 5
@@ -27,12 +27,12 @@ const MaxPromptToolIterations = 5
 // ChatSession handles a chat conversation with tool support
 type ChatSession struct {
 	config   *config.Config
-	registry *skills.Registry
+	registry *capabilities.Registry
 	manager  *Manager
 }
 
 // NewChatSession creates a new chat session
-func NewChatSession(cfg *config.Config, registry *skills.Registry, manager *Manager) *ChatSession {
+func NewChatSession(cfg *config.Config, registry *capabilities.Registry, manager *Manager) *ChatSession {
 	return &ChatSession{
 		config:   cfg,
 		registry: registry,
@@ -308,7 +308,7 @@ func (s *ChatSession) chatWithNativeTools(ctx context.Context, providerName stri
 
 		for _, toolCall := range assistantMsg.ToolCalls {
 			log.Printf("[ai] tool call: name=%s id=%s args=%s", toolCall.Function.Name, toolCall.ID, toolCall.Function.Arguments)
-			call := skills.ToolCall{
+			call := capabilities.ToolCall{
 				ID:        toolCall.ID,
 				Name:      toolCall.Function.Name,
 				Arguments: json.RawMessage(toolCall.Function.Arguments),
@@ -476,7 +476,7 @@ func (s *ChatSession) streamChatWithNativeTools(ctx context.Context, providerNam
 
 		for _, toolCall := range toolCalls {
 			log.Printf("[ai] stream tool call: name=%s id=%s args=%s", toolCall.Function.Name, toolCall.ID, toolCall.Function.Arguments)
-			call := skills.ToolCall{
+			call := capabilities.ToolCall{
 				ID:        toolCall.ID,
 				Name:      toolCall.Function.Name,
 				Arguments: json.RawMessage(toolCall.Function.Arguments),

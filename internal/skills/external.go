@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pibot/pibot/internal/capabilities"
 	"gopkg.in/yaml.v3"
 )
 
@@ -78,8 +79,10 @@ func (s *ExternalSkill) Execute(ctx context.Context, params json.RawMessage) (st
 
 // LoadExternalSkills scans the given directory for skill subdirectories and
 // registers any valid skills it finds into the registry.
-// Each skill subdirectory must contain a skill.yaml manifest file.
-func LoadExternalSkills(registry *Registry, skillsDir string) error {
+// Each skill subdirectory must contain a skill.yaml or skill.md manifest file.
+// skill.md uses YAML frontmatter (between --- delimiters) for name, description,
+// parameters, and optional executable; the rest of the file is documentation.
+func LoadExternalSkills(registry *capabilities.Registry, skillsDir string) error {
 	expanded := expandHome(skillsDir)
 
 	info, err := os.Stat(expanded)
@@ -110,7 +113,7 @@ func LoadExternalSkills(registry *Registry, skillsDir string) error {
 			log.Printf("Skipping external skill %q: %v", entry.Name(), err)
 			continue
 		}
-		registry.Register(skill)
+		registry.Register(skill, capabilities.KindSkill)
 		log.Printf("Loaded external skill %q from %s", skill.Name(), skillDir)
 		loaded++
 	}
@@ -122,23 +125,18 @@ func LoadExternalSkills(registry *Registry, skillsDir string) error {
 }
 
 // loadExternalSkill reads a skill directory and returns an ExternalSkill.
+// Manifest is read from skill.yaml, or from skill.md (YAML frontmatter).
 func loadExternalSkill(skillDir string) (*ExternalSkill, error) {
-	manifestPath := filepath.Join(skillDir, "skill.yaml")
-	data, err := os.ReadFile(manifestPath)
+	manifest, _, err := readManifest(skillDir)
 	if err != nil {
-		return nil, fmt.Errorf("missing skill.yaml: %w", err)
-	}
-
-	var manifest ExternalSkillManifest
-	if err := yaml.Unmarshal(data, &manifest); err != nil {
-		return nil, fmt.Errorf("invalid skill.yaml: %w", err)
+		return nil, err
 	}
 
 	if manifest.Name == "" {
-		return nil, fmt.Errorf("skill.yaml must specify a name")
+		return nil, fmt.Errorf("manifest must specify a name")
 	}
 	if manifest.Description == "" {
-		return nil, fmt.Errorf("skill.yaml must specify a description")
+		return nil, fmt.Errorf("manifest must specify a description")
 	}
 
 	execPath, err := resolveExecutable(skillDir, manifest.Executable)
@@ -151,6 +149,58 @@ func loadExternalSkill(skillDir string) (*ExternalSkill, error) {
 		execPath: execPath,
 		skillDir: skillDir,
 	}, nil
+}
+
+// readManifest loads manifest from skill.yaml or skill.md (YAML frontmatter).
+// Returns manifest, raw file content (for .md the full file), and error.
+func readManifest(skillDir string) (ExternalSkillManifest, []byte, error) {
+	var manifest ExternalSkillManifest
+	yamlPath := filepath.Join(skillDir, "skill.yaml")
+	mdPath := filepath.Join(skillDir, "skill.md")
+
+	data, err := os.ReadFile(yamlPath)
+	if err == nil {
+		if err := yaml.Unmarshal(data, &manifest); err != nil {
+			return manifest, nil, fmt.Errorf("invalid skill.yaml: %w", err)
+		}
+		return manifest, data, nil
+	}
+	if !os.IsNotExist(err) {
+		return manifest, nil, fmt.Errorf("reading skill.yaml: %w", err)
+	}
+
+	data, err = os.ReadFile(mdPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return manifest, nil, fmt.Errorf("missing skill.yaml or skill.md: %w", err)
+		}
+		return manifest, nil, fmt.Errorf("reading skill.md: %w", err)
+	}
+	frontmatter, err := parseYAMLFrontmatter(data)
+	if err != nil {
+		return manifest, nil, fmt.Errorf("invalid skill.md frontmatter: %w", err)
+	}
+	if err := yaml.Unmarshal(frontmatter, &manifest); err != nil {
+		return manifest, nil, fmt.Errorf("invalid skill.md frontmatter: %w", err)
+	}
+	return manifest, data, nil
+}
+
+// parseYAMLFrontmatter extracts the first --- ... --- block from md content.
+func parseYAMLFrontmatter(md []byte) ([]byte, error) {
+	const delim = "---"
+	lines := strings.Split(string(md), "\n")
+	if len(lines) == 0 || strings.TrimSpace(lines[0]) != delim {
+		return nil, fmt.Errorf("markdown must start with %q", delim)
+	}
+	var block []string
+	for i := 1; i < len(lines); i++ {
+		if strings.TrimSpace(lines[i]) == delim {
+			return []byte(strings.Join(block, "\n")), nil
+		}
+		block = append(block, lines[i])
+	}
+	return nil, fmt.Errorf("no closing %q found", delim)
 }
 
 // resolveExecutable finds the executable for a skill.
@@ -176,7 +226,7 @@ func resolveExecutable(skillDir, hint string) (string, error) {
 		return "", fmt.Errorf("cannot read skill directory: %w", err)
 	}
 	for _, e := range entries {
-		if e.IsDir() || e.Name() == "skill.yaml" {
+		if e.IsDir() || e.Name() == "skill.yaml" || e.Name() == "skill.md" {
 			continue
 		}
 		p := filepath.Join(skillDir, e.Name())

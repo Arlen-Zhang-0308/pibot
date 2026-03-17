@@ -1,4 +1,4 @@
-package skills
+package tools
 
 import (
 	"context"
@@ -8,35 +8,30 @@ import (
 	"github.com/pibot/pibot/internal/executor"
 )
 
-// ExecuteCommandParams represents parameters for the execute_command skill
+// ExecuteCommandParams represents parameters for the execute_command tool.
 type ExecuteCommandParams struct {
 	Command string `json:"command"`
 }
 
-// ExecuteCommandSkill executes shell commands on the Raspberry Pi
-type ExecuteCommandSkill struct {
+// ExecuteCommandTool executes shell commands on the Raspberry Pi.
+type ExecuteCommandTool struct {
 	executor *executor.Executor
 }
 
-// NewExecuteCommandSkill creates a new execute_command skill
-func NewExecuteCommandSkill(exec *executor.Executor) *ExecuteCommandSkill {
-	return &ExecuteCommandSkill{
+// NewExecuteCommandTool creates a new execute_command tool.
+func NewExecuteCommandTool(exec *executor.Executor) *ExecuteCommandTool {
+	return &ExecuteCommandTool{
 		executor: exec,
 	}
 }
 
-// Name returns the skill name
-func (s *ExecuteCommandSkill) Name() string {
-	return "execute_command"
-}
+func (t *ExecuteCommandTool) Name() string { return "execute_command" }
 
-// Description returns the skill description
-func (s *ExecuteCommandSkill) Description() string {
+func (t *ExecuteCommandTool) Description() string {
 	return "Execute a shell command on the Raspberry Pi. Use this to run system commands like ls, pwd, cat, grep, etc. Commands are sandboxed for security - safe commands execute immediately, while dangerous commands require user confirmation."
 }
 
-// Parameters returns the JSON schema for the skill parameters
-func (s *ExecuteCommandSkill) Parameters() map[string]interface{} {
+func (t *ExecuteCommandTool) Parameters() map[string]interface{} {
 	return map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
@@ -49,8 +44,7 @@ func (s *ExecuteCommandSkill) Parameters() map[string]interface{} {
 	}
 }
 
-// Execute runs the command
-func (s *ExecuteCommandSkill) Execute(ctx context.Context, params json.RawMessage) (string, error) {
+func (t *ExecuteCommandTool) Execute(ctx context.Context, params json.RawMessage) (string, error) {
 	var p ExecuteCommandParams
 	if err := json.Unmarshal(params, &p); err != nil {
 		return "", fmt.Errorf("invalid parameters: %w", err)
@@ -60,14 +54,13 @@ func (s *ExecuteCommandSkill) Execute(ctx context.Context, params json.RawMessag
 		return "", fmt.Errorf("command is required")
 	}
 
-	result, err := s.executor.Execute(ctx, p.Command)
+	result, err := t.executor.Execute(ctx, p.Command)
 	if err != nil {
 		return "", err
 	}
 
-	// Format the result
 	if result.Pending {
-		return fmt.Sprintf("Command requires user confirmation (security level: %s). Pending ID: %s\nCommand: %s", 
+		return fmt.Sprintf("Command requires user confirmation (security level: %s). Pending ID: %s\nCommand: %s",
 			result.Level, result.PendingID, result.Command), nil
 	}
 

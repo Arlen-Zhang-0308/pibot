@@ -6,46 +6,44 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/pibot/pibot/internal/ai"
+	"github.com/pibot/pibot/internal/capabilities"
 	"github.com/pibot/pibot/internal/config"
 	"github.com/pibot/pibot/internal/executor"
 	"github.com/pibot/pibot/internal/fileops"
 	"github.com/pibot/pibot/internal/scheduler"
 	"github.com/pibot/pibot/internal/skills"
+	"github.com/pibot/pibot/internal/tools"
 )
 
 // Server holds all dependencies for the API server
 type Server struct {
-	config      *config.Config
-	aiManager   *ai.Manager
-	chatSession *ai.ChatSession
-	executor    *executor.Executor
-	fileOps     *fileops.FileOps
-	skills      *skills.Registry
-	scheduler   *scheduler.Scheduler
-	wsHub       *Hub
-	router      *mux.Router
+	config       *config.Config
+	aiManager    *ai.Manager
+	chatSession  *ai.ChatSession
+	executor     *executor.Executor
+	fileOps      *fileops.FileOps
+	capabilities *capabilities.Registry
+	scheduler    *scheduler.Scheduler
+	wsHub        *Hub
+	router       *mux.Router
 }
 
 // NewServer creates a new API server
 func NewServer(cfg *config.Config, aiMgr *ai.Manager, exec *executor.Executor, fops *fileops.FileOps, sched *scheduler.Scheduler) *Server {
-	// Create skills registry
-	skillsRegistry := skills.NewRegistry()
+	// Create unified capabilities registry
+	reg := capabilities.NewRegistry()
 
-	// Register built-in skills
-	skillsRegistry.Register(skills.NewExecuteCommandSkill(exec))
-	skillsRegistry.Register(skills.NewReadFileSkill(fops))
-	skillsRegistry.Register(skills.NewWriteFileSkill(fops))
-	skillsRegistry.Register(skills.NewListDirectorySkill(fops))
-	skillsRegistry.Register(skills.NewSystemInfoSkill(fops))
+	// Register built-in Go tools
+	tools.RegisterAll(reg, exec, fops)
 
 	// Load external skills from ~/.pibot_skills
 	skillsPath := cfg.GetSkillsPath()
-	if err := skills.LoadExternalSkills(skillsRegistry, skillsPath); err != nil {
+	if err := skills.LoadExternalSkills(reg, skillsPath); err != nil {
 		log.Printf("Warning: failed to load external skills from %s: %v", skillsPath, err)
 	}
 
-	// Create chat session with tools
-	chatSession := ai.NewChatSession(cfg, skillsRegistry, aiMgr)
+	// Create chat session with the capabilities registry
+	chatSession := ai.NewChatSession(cfg, reg, aiMgr)
 
 	// Wire chat session into scheduler for AI action support
 	if sched != nil {
@@ -53,15 +51,15 @@ func NewServer(cfg *config.Config, aiMgr *ai.Manager, exec *executor.Executor, f
 	}
 
 	s := &Server{
-		config:      cfg,
-		aiManager:   aiMgr,
-		chatSession: chatSession,
-		executor:    exec,
-		fileOps:     fops,
-		skills:      skillsRegistry,
-		scheduler:   sched,
-		wsHub:       NewHub(),
-		router:      mux.NewRouter(),
+		config:       cfg,
+		aiManager:    aiMgr,
+		chatSession:  chatSession,
+		executor:     exec,
+		fileOps:      fops,
+		capabilities: reg,
+		scheduler:    sched,
+		wsHub:        NewHub(),
+		router:       mux.NewRouter(),
 	}
 
 	s.setupRoutes()

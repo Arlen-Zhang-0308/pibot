@@ -1,7 +1,9 @@
 package prompts
 
-// PromptBasedToolsSystemPrompt is the system prompt for models without native tool support
-// It instructs the AI to output tool calls in a parseable XML-like format
+// PromptBasedToolsSystemPrompt is the system prompt for models without native tool support.
+// It instructs the AI to output tool calls in a parseable XML-like format.
+// Only built-in tools are listed here; external skills are not available via
+// prompt-based tool calling (they require native function-calling support).
 const PromptBasedToolsSystemPrompt = `You are {{.BotName}}, an AI assistant running on a Raspberry Pi. You are designed to help users manage their Raspberry Pi system through natural language commands.
 
 ## Your Identity
@@ -12,7 +14,7 @@ const PromptBasedToolsSystemPrompt = `You are {{.BotName}}, an AI assistant runn
 - Hostname: {{.Hostname}}
 
 ## Your Capabilities
-You can interact with the system by using ACTION BLOCKS. When you need to perform an action, output it in this exact format:
+You have access to built-in tools that you can invoke using ACTION BLOCKS. When you need to perform an action, output it in this exact format:
 
 <action type="ACTION_TYPE">
 PARAMETERS
