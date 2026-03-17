@@ -2,52 +2,14 @@ package prompts
 
 import (
 	"bytes"
+	"log"
 	"text/template"
 	"time"
 
 	"github.com/pibot/pibot/internal/config"
 )
 
-// DefaultSystemPrompt is the default system prompt template for PiBot
-const DefaultSystemPrompt = `You are {{.BotName}}, an AI assistant running on a Raspberry Pi. You are designed to help users manage their Raspberry Pi system through natural language commands.
-
-## Your Identity
-- Name: {{.BotName}}
-- Role: AI-powered Raspberry Pi assistant
-- Workspace: {{.WorkspaceDir}}
-- Current Time: {{.CurrentTime}}
-- Hostname: {{.Hostname}}
-
-## Your Capabilities
-You have access to built-in **tools** (Go functions you call directly) and optional **skills** (external scripts loaded from the skills directory).
-
-### Built-in Tools
-1. **execute_command**: Run shell commands on the Raspberry Pi. Safe commands (ls, pwd, cat, etc.) execute immediately. Dangerous commands (rm, sudo, etc.) require user confirmation.
-2. **read_file**: Read the contents of files within the workspace or allowed directories.
-3. **write_file**: Create or modify files within the workspace or allowed directories.
-4. **list_directory**: List files and directories in a specified path.
-5. **system_info**: Get system information including current directory, hostname, OS, and architecture.
-6. **web_search**: Search the web for information using DuckDuckGo.
-
-### External Skills
-Additional capabilities may be available as external skills loaded from the skills directory. These are script-based and may require more consideration in how to invoke them.
-
-## Guidelines
-- When users ask about files, directories, or system state, USE YOUR TOOLS to get accurate, real-time information. Do not guess or make assumptions.
-- If a user asks "What is your current directory?" or similar, use the system_info tool to provide accurate information.
-- Be helpful, concise, and accurate in your responses.
-- When executing commands, explain what you're doing and show the results clearly.
-- For potentially dangerous operations, warn the user and explain the risks.
-- If a command requires confirmation, let the user know and explain why.
-
-## Response Format
-- Be conversational but efficient
-- When showing command output, format it clearly
-- If an error occurs, explain what went wrong and suggest solutions
-- Use markdown formatting when appropriate for readability
-`
-
-// TemplateData contains data for rendering the system prompt
+// TemplateData contains data for rendering the system prompt.
 type TemplateData struct {
 	BotName      string
 	WorkspaceDir string
@@ -56,9 +18,19 @@ type TemplateData struct {
 	UserName     string
 }
 
-// BuildSystemPrompt renders the system prompt template with the given data
+// systemPromptTemplate returns the parsed system prompt template from the
+// embedded files/system_prompt.md file.
+func systemPromptTemplate() (*template.Template, error) {
+	raw, err := readPromptFile("system_prompt.md")
+	if err != nil {
+		return nil, err
+	}
+	return template.New("system_prompt").Parse(string(raw))
+}
+
+// BuildSystemPrompt renders the system prompt template with the given data.
 func BuildSystemPrompt(data TemplateData) (string, error) {
-	tmpl, err := template.New("system_prompt").Parse(DefaultSystemPrompt)
+	tmpl, err := systemPromptTemplate()
 	if err != nil {
 		return "", err
 	}
@@ -71,12 +43,15 @@ func BuildSystemPrompt(data TemplateData) (string, error) {
 	return buf.String(), nil
 }
 
-// BuildSystemPromptWithDefaults builds a system prompt with default values
+// BuildSystemPromptWithDefaults builds a system prompt with default values.
 func BuildSystemPromptWithDefaults(workspaceDir, hostname string) string {
 	return BuildSystemPromptFromConfig(nil, workspaceDir, hostname)
 }
 
-// BuildSystemPromptFromConfig builds a system prompt using config values
+// BuildSystemPromptFromConfig builds a system prompt using config values.
+// Resolution order:
+//  1. system_prompt field in config (inline override string)
+//  2. Embedded files/system_prompt.md template
 func BuildSystemPromptFromConfig(cfg *config.Config, workspaceDir, hostname string) string {
 	botName := "PiBot"
 	customPrompt := ""
@@ -89,7 +64,7 @@ func BuildSystemPromptFromConfig(cfg *config.Config, workspaceDir, hostname stri
 		customPrompt = promptsCfg.SystemPrompt
 	}
 
-	// If custom prompt is set, use it directly
+	// Inline config value takes highest priority.
 	if customPrompt != "" {
 		return customPrompt
 	}
@@ -103,15 +78,15 @@ func BuildSystemPromptFromConfig(cfg *config.Config, workspaceDir, hostname stri
 
 	prompt, err := BuildSystemPrompt(data)
 	if err != nil {
-		// Fall back to a simple prompt if template fails
+		log.Printf("prompts: failed to render system_prompt.md: %v", err)
 		return "You are " + botName + ", an AI assistant for Raspberry Pi. Use your available tools to help users manage their system."
 	}
 
 	return prompt
 }
 
-// GetToolCallInstructions returns instructions for how the AI should format tool calls
-// This is used when the provider doesn't have native tool support
+// ToolCallInstructions returns instructions for how the AI should format tool
+// calls when the provider does not have native tool support.
 const ToolCallInstructions = `
 ## Tool Call Format
 When you need to use a tool, respond with a JSON tool call in this exact format:

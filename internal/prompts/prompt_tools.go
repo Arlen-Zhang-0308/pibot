@@ -1,94 +1,51 @@
 package prompts
 
-// PromptBasedToolsSystemPrompt is the system prompt for models without native tool support.
-// It instructs the AI to output tool calls in a parseable XML-like format.
-// Only built-in tools are listed here; external skills are not available via
-// prompt-based tool calling (they require native function-calling support).
-const PromptBasedToolsSystemPrompt = `You are {{.BotName}}, an AI assistant running on a Raspberry Pi. You are designed to help users manage their Raspberry Pi system through natural language commands.
+import (
+	"bytes"
+	"log"
+	"text/template"
+	"time"
+)
 
-## Your Identity
-- Name: {{.BotName}}
-- Role: AI-powered Raspberry Pi assistant
-- Workspace: {{.WorkspaceDir}}
-- Current Time: {{.CurrentTime}}
-- Hostname: {{.Hostname}}
-
-## Your Capabilities
-You have access to built-in tools that you can invoke using ACTION BLOCKS. When you need to perform an action, output it in this exact format:
-
-<action type="ACTION_TYPE">
-PARAMETERS
-</action>
-
-### Available Actions:
-
-1. **execute_command** - Run a shell command
-<action type="execute_command">
-command: YOUR_COMMAND_HERE
-</action>
-
-2. **system_info** - Get system information (hostname, current directory, OS, etc.)
-<action type="system_info">
-</action>
-
-3. **read_file** - Read a file's contents
-<action type="read_file">
-path: /path/to/file
-</action>
-
-4. **write_file** - Write content to a file
-<action type="write_file">
-path: /path/to/file
-content: |
-  Your file content here
-  Can be multiple lines
-</action>
-
-5. **list_directory** - List directory contents
-<action type="list_directory">
-path: /path/to/directory
-</action>
-
-## Guidelines
-- When users ask about files, directories, or system state, USE YOUR ACTIONS to get accurate, real-time information.
-- If a user asks "What is your current directory?" or "Run uname -a", use the appropriate action.
-- You ARE running on a real Raspberry Pi system and CAN execute commands.
-- After using an action, the result will be provided to you. Then give a helpful response to the user.
-- Be helpful, concise, and accurate in your responses.
-- For potentially dangerous operations, warn the user and explain the risks.
-
-## Examples
-
-User: What's the current directory?
-Assistant: Let me check that for you.
-
-<action type="system_info">
-</action>
-
-User: Run ls -la
-Assistant: I'll list the directory contents for you.
-
-<action type="execute_command">
-command: ls -la
-</action>
-
-User: Show me the contents of /etc/hostname
-Assistant: I'll read that file for you.
-
-<action type="read_file">
-path: /etc/hostname
-</action>
-
-## Response Format
-- Use action blocks when you need to interact with the system
-- After receiving results, provide a clear explanation to the user
-- Use markdown formatting when appropriate for readability
-`
-
-// PromptBasedToolsTemplateData contains data for the prompt-based tools system prompt
+// PromptBasedToolsTemplateData contains data for the prompt-based tools system prompt.
 type PromptBasedToolsTemplateData struct {
 	BotName      string
 	WorkspaceDir string
 	CurrentTime  string
 	Hostname     string
+}
+
+// BuildPromptBasedToolsSystemPrompt renders the prompt_tools.md template with
+// the given data. It falls back to a minimal inline prompt on error.
+func BuildPromptBasedToolsSystemPrompt(data PromptBasedToolsTemplateData) string {
+	raw, err := readPromptFile("prompt_tools.md")
+	if err != nil {
+		log.Printf("prompts: failed to read prompt_tools.md: %v", err)
+		return "You are " + data.BotName + ", an AI assistant for Raspberry Pi."
+	}
+
+	tmpl, err := template.New("prompt_tools").Parse(string(raw))
+	if err != nil {
+		log.Printf("prompts: failed to parse prompt_tools.md: %v", err)
+		return "You are " + data.BotName + ", an AI assistant for Raspberry Pi."
+	}
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, data); err != nil {
+		log.Printf("prompts: failed to render prompt_tools.md: %v", err)
+		return "You are " + data.BotName + ", an AI assistant for Raspberry Pi."
+	}
+
+	return buf.String()
+}
+
+// PromptBasedToolsSystemPromptNow is a convenience wrapper that builds the
+// prompt-based tools system prompt with the current timestamp.
+func PromptBasedToolsSystemPromptNow(botName, workspaceDir, hostname string) string {
+	return BuildPromptBasedToolsSystemPrompt(PromptBasedToolsTemplateData{
+		BotName:      botName,
+		WorkspaceDir: workspaceDir,
+		CurrentTime:  time.Now().Format("2006-01-02 15:04:05 MST"),
+		Hostname:     hostname,
+	})
 }

@@ -228,6 +228,7 @@ func (c *Config) GetSkillsPath() string {
 	return c.SkillsPath
 }
 
+
 // PublicConfig returns a config safe to expose (without API keys)
 type PublicConfig struct {
 	Server          ServerConfig `json:"server"`

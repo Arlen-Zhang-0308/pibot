@@ -1,7 +1,6 @@
 package ai
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,8 +8,6 @@ import (
 	"log"
 	"os"
 	"strings"
-	"text/template"
-	"time"
 
 	"github.com/pibot/pibot/internal/capabilities"
 	"github.com/pibot/pibot/internal/config"
@@ -54,6 +51,7 @@ func (s *ChatSession) buildSystemPrompt() Message {
 }
 
 // buildPromptBasedToolsSystemPrompt creates a system prompt for prompt-based tool calling
+// using the embedded files/prompt_tools.md template.
 func (s *ChatSession) buildPromptBasedToolsSystemPrompt() Message {
 	hostname, _ := os.Hostname()
 	workspaceDir := s.getWorkspaceDir()
@@ -66,32 +64,9 @@ func (s *ChatSession) buildPromptBasedToolsSystemPrompt() Message {
 		}
 	}
 
-	data := prompts.PromptBasedToolsTemplateData{
-		BotName:      botName,
-		WorkspaceDir: workspaceDir,
-		CurrentTime:  time.Now().Format("2006-01-02 15:04:05 MST"),
-		Hostname:     hostname,
-	}
-
-	tmpl, err := template.New("prompt_tools").Parse(prompts.PromptBasedToolsSystemPrompt)
-	if err != nil {
-		return Message{
-			Role:    RoleSystem,
-			Content: "You are " + botName + ", an AI assistant for Raspberry Pi.",
-		}
-	}
-
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, data); err != nil {
-		return Message{
-			Role:    RoleSystem,
-			Content: "You are " + botName + ", an AI assistant for Raspberry Pi.",
-		}
-	}
-
 	return Message{
 		Role:    RoleSystem,
-		Content: buf.String(),
+		Content: prompts.PromptBasedToolsSystemPromptNow(botName, workspaceDir, hostname),
 	}
 }
 
