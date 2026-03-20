@@ -39,7 +39,7 @@ func NewServer(cfg *config.Config, aiMgr *ai.Manager, exec *executor.Executor, f
 	reboter := reboot.New(cfg)
 
 	// Register built-in Go tools
-	tools.RegisterAll(reg, exec, fops, reboter)
+	tools.RegisterAll(reg, exec, fops, reboter, cfg)
 
 	// Load external skills from ~/.pibot_skills
 	skillsPath := cfg.GetSkillsPath()

@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -9,23 +10,28 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/pibot/pibot/internal/config"
 )
 
 const (
 	duckduckgoAPIURL   = "https://api.duckduckgo.com/"
+	perplexitySearchURL = "https://api.perplexity.ai/search"
 	defaultMaxResults  = 5
 	httpTimeoutSeconds = 15
 )
 
-// WebSearchTool searches the web using the DuckDuckGo Instant Answer API.
-// No API key is required.
+// WebSearchTool searches the web, preferring DuckDuckGo and falling back to
+// Perplexity when a DuckDuckGo API key is not configured.
 type WebSearchTool struct {
+	cfg        config.WebSearchConfig
 	httpClient *http.Client
 }
 
-// NewWebSearchTool creates a new WebSearchTool.
-func NewWebSearchTool() *WebSearchTool {
+// NewWebSearchTool creates a new WebSearchTool using the provided config.
+func NewWebSearchTool(cfg config.WebSearchConfig) *WebSearchTool {
 	return &WebSearchTool{
+		cfg: cfg,
 		httpClient: &http.Client{
 			Timeout: httpTimeoutSeconds * time.Second,
 		},
@@ -35,7 +41,7 @@ func NewWebSearchTool() *WebSearchTool {
 func (t *WebSearchTool) Name() string { return "web_search" }
 
 func (t *WebSearchTool) Description() string {
-	return "Search the web for information using DuckDuckGo. Returns an abstract summary, direct answer (if available), and related topics for the query."
+	return "Search the web for information. Uses DuckDuckGo by default; falls back to Perplexity when configured."
 }
 
 func (t *WebSearchTool) Parameters() map[string]interface{} {
@@ -48,29 +54,12 @@ func (t *WebSearchTool) Parameters() map[string]interface{} {
 			},
 			"max_results": map[string]interface{}{
 				"type":        "integer",
-				"description": "Maximum number of related topics to include in the results (default: 5, max: 10).",
+				"description": "Maximum number of results to return (default: 5, max: 10).",
 				"default":     defaultMaxResults,
 			},
 		},
 		"required": []string{"query"},
 	}
-}
-
-// duckduckgoResponse is the relevant subset of the DuckDuckGo Instant Answer JSON response.
-type duckduckgoResponse struct {
-	Abstract       string `json:"Abstract"`
-	AbstractSource string `json:"AbstractSource"`
-	AbstractURL    string `json:"AbstractURL"`
-	Answer         string `json:"Answer"`
-	AnswerType     string `json:"AnswerType"`
-	RelatedTopics  []struct {
-		Text     string `json:"Text"`
-		FirstURL string `json:"FirstURL"`
-		Topics   []struct {
-			Text     string `json:"Text"`
-			FirstURL string `json:"FirstURL"`
-		} `json:"Topics"`
-	} `json:"RelatedTopics"`
 }
 
 type webSearchParams struct {
@@ -93,6 +82,35 @@ func (t *WebSearchTool) Execute(ctx context.Context, params json.RawMessage) (st
 		p.MaxResults = 10
 	}
 
+	// DuckDuckGo is the default (free, no key required). If its api_key is set,
+	// it is forwarded as a Bearer token. Perplexity is used only when the DDG
+	// api_key is empty AND a Perplexity api_key is configured.
+	if t.cfg.DuckDuckGoAPIKey != "" || t.cfg.PerplexityAPIKey == "" {
+		return t.duckduckgoSearch(ctx, p)
+	}
+	return t.perplexitySearch(ctx, p)
+}
+
+// ── DuckDuckGo ────────────────────────────────────────────────────────────────
+
+// duckduckgoResponse is the relevant subset of the DuckDuckGo Instant Answer JSON response.
+type duckduckgoResponse struct {
+	Abstract       string `json:"Abstract"`
+	AbstractSource string `json:"AbstractSource"`
+	AbstractURL    string `json:"AbstractURL"`
+	Answer         string `json:"Answer"`
+	AnswerType     string `json:"AnswerType"`
+	RelatedTopics  []struct {
+		Text     string `json:"Text"`
+		FirstURL string `json:"FirstURL"`
+		Topics   []struct {
+			Text     string `json:"Text"`
+			FirstURL string `json:"FirstURL"`
+		} `json:"Topics"`
+	} `json:"RelatedTopics"`
+}
+
+func (t *WebSearchTool) duckduckgoSearch(ctx context.Context, p webSearchParams) (string, error) {
 	apiURL := fmt.Sprintf("%s?q=%s&format=json&no_html=1&skip_disambig=1",
 		duckduckgoAPIURL, url.QueryEscape(p.Query))
 
@@ -101,6 +119,9 @@ func (t *WebSearchTool) Execute(ctx context.Context, params json.RawMessage) (st
 		return "", fmt.Errorf("failed to build request: %w", err)
 	}
 	req.Header.Set("User-Agent", "PiBot/1.0 (https://github.com/pibot/pibot)")
+	if t.cfg.DuckDuckGoAPIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+t.cfg.DuckDuckGoAPIKey)
+	}
 
 	resp, err := t.httpClient.Do(req)
 	if err != nil {
@@ -109,7 +130,7 @@ func (t *WebSearchTool) Execute(ctx context.Context, params json.RawMessage) (st
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("search API returned status %d", resp.StatusCode)
+		return "", fmt.Errorf("DuckDuckGo API returned status %d", resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(resp.Body)
@@ -122,10 +143,10 @@ func (t *WebSearchTool) Execute(ctx context.Context, params json.RawMessage) (st
 		return "", fmt.Errorf("failed to parse response: %w", err)
 	}
 
-	return t.formatResults(p.Query, &ddgResp, p.MaxResults), nil
+	return t.formatDDGResults(p.Query, &ddgResp, p.MaxResults), nil
 }
 
-func (t *WebSearchTool) formatResults(query string, r *duckduckgoResponse, maxResults int) string {
+func (t *WebSearchTool) formatDDGResults(query string, r *duckduckgoResponse, maxResults int) string {
 	var sb strings.Builder
 
 	sb.WriteString(fmt.Sprintf("Search results for: %q\n\n", query))
@@ -142,7 +163,6 @@ func (t *WebSearchTool) formatResults(query string, r *duckduckgoResponse, maxRe
 		sb.WriteString("\n")
 	}
 
-	// Collect flat list of related topics (topics may be nested under a group)
 	type topic struct {
 		text string
 		url  string
@@ -179,4 +199,92 @@ func (t *WebSearchTool) formatResults(query string, r *duckduckgoResponse, maxRe
 		return fmt.Sprintf("No results found for %q. Try rephrasing your query.", query)
 	}
 	return result
+}
+
+// ── Perplexity Search API ─────────────────────────────────────────────────────
+
+type perplexitySearchRequest struct {
+	Query      string `json:"query"`
+	MaxResults int    `json:"max_results"`
+}
+
+type perplexitySearchResponse struct {
+	Results []perplexitySearchResult `json:"results"`
+}
+
+type perplexitySearchResult struct {
+	Title   string `json:"title"`
+	URL     string `json:"url"`
+	Snippet string `json:"snippet"`
+	Date    string `json:"date"`
+}
+
+func (t *WebSearchTool) perplexitySearch(ctx context.Context, p webSearchParams) (string, error) {
+	reqBody := perplexitySearchRequest{
+		Query:      p.Query,
+		MaxResults: p.MaxResults,
+	}
+
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", fmt.Errorf("failed to build request body: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, perplexitySearchURL, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return "", fmt.Errorf("failed to build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+t.cfg.PerplexityAPIKey)
+
+	resp, err := t.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("perplexity search request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ = io.ReadAll(resp.Body)
+		return "", fmt.Errorf("perplexity API returned status %d: %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	bodyBytes, err = io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read perplexity response: %w", err)
+	}
+
+	var pResp perplexitySearchResponse
+	if err := json.Unmarshal(bodyBytes, &pResp); err != nil {
+		return "", fmt.Errorf("failed to parse perplexity response: %w", err)
+	}
+
+	return t.formatPerplexityResults(p.Query, pResp.Results), nil
+}
+
+func (t *WebSearchTool) formatPerplexityResults(query string, results []perplexitySearchResult) string {
+	if len(results) == 0 {
+		return fmt.Sprintf("No results found for %q. Try rephrasing your query.", query)
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Search results for: %q\n\n", query))
+
+	for i, r := range results {
+		sb.WriteString(fmt.Sprintf("%d. %s\n", i+1, r.Title))
+		sb.WriteString(fmt.Sprintf("   %s\n", r.URL))
+		if r.Date != "" {
+			sb.WriteString(fmt.Sprintf("   Date: %s\n", r.Date))
+		}
+		if r.Snippet != "" {
+			// Trim very long snippets to keep the output readable
+			snippet := r.Snippet
+			if len(snippet) > 300 {
+				snippet = snippet[:300] + "..."
+			}
+			sb.WriteString(fmt.Sprintf("   %s\n", snippet))
+		}
+		sb.WriteString("\n")
+	}
+
+	return strings.TrimSpace(sb.String())
 }

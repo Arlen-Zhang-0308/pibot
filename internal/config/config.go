@@ -16,6 +16,7 @@ type Config struct {
 	Executor   ExecutorConfig    `yaml:"executor"`
 	FileOps    FileOpsConfig     `yaml:"fileops"`
 	Prompts    PromptsConfig     `yaml:"prompts"`
+	WebSearch  WebSearchConfig   `yaml:"web_search"`
 	SkillsPath string            `yaml:"skills_path"`
 	Reboot     RebootConfig      `yaml:"reboot"`
 	// Env holds environment variables that are injected into the process
@@ -23,6 +24,18 @@ type Config struct {
 	Env        map[string]string `yaml:"env,omitempty"`
 	mu         sync.RWMutex      `yaml:"-"`
 	configPath string            `yaml:"-"`
+}
+
+// WebSearchConfig holds configuration for the web search tool.
+// Priority: DuckDuckGo is used first (no API key required for the free Instant
+// Answer endpoint, but an API key can be set for future paid tiers). If
+// DuckDuckGo's api_key is empty, Perplexity is used as the fallback via its
+// Search API (requires perplexity_api_key).
+type WebSearchConfig struct {
+	// DuckDuckGoAPIKey is optional. Leave empty to use the free Instant Answer API.
+	DuckDuckGoAPIKey string `yaml:"duckduckgo_api_key"`
+	// PerplexityAPIKey enables the Perplexity Search API as a fallback.
+	PerplexityAPIKey string `yaml:"perplexity_api_key"`
 }
 
 // RebootConfig holds settings for how the bot restarts itself.
@@ -250,6 +263,13 @@ func (c *Config) GetPrompts() PromptsConfig {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.Prompts
+}
+
+// GetWebSearch returns the web search configuration (thread-safe).
+func (c *Config) GetWebSearch() WebSearchConfig {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.WebSearch
 }
 
 // GetReboot returns the reboot configuration (thread-safe).

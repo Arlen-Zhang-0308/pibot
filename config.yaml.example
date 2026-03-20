@@ -16,9 +16,9 @@ ai:
         base_url: http://localhost:11434
         model: llama3
     qwen:
-        api_key: ""  # Set your DashScope API key here
+        api_key: "sk-d14d1f28c05b4220bdf3059fda408eb3"  # Set your DashScope API key here
         base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
-        model: qwen-plus
+        model: glm-4.7
 executor:
     safe_commands:
         - ls
@@ -80,6 +80,14 @@ executor:
 fileops:
     base_directory: ~/pibot-workspace
     allowed_paths: []
+# Web search tool configuration.
+# Priority: DuckDuckGo is always tried first (free, no key needed).
+# If duckduckgo_api_key is set, it is sent as a Bearer token.
+# If duckduckgo_api_key is empty, Perplexity is used as the fallback
+# (requires perplexity_api_key).
+web_search:
+    duckduckgo_api_key: ""
+    perplexity_api_key: ""
 prompts:
     # Custom system prompt (leave empty to use default PiBot system prompt)
     # You can customize this to change PiBot's personality and instructions
@@ -91,8 +99,19 @@ prompts:
     enable_tools: true
 # Path to directory containing external skills (default: ~/.pibot_skills)
 # Each subdirectory should contain a skill.yaml manifest and an executable file.
-skills_path: ~/.pibot-workspace/skills
+skills_path: ~/pibot-workspace/skills
 # Environment variables injected into the process at startup.
 # Use this to set API keys or other secrets without hardcoding them in ai: sections.
 env:
-    PERPLEXITY_API_KEY: your_key
+    # PERPLEXITY_API_KEY: your_key
+# Reboot configuration - controls how the bot restarts itself
+reboot:
+    # plan: which reboot strategy to use. Currently supported: "screen" (default)
+    plan: screen
+    screen:
+        # The screen session name that hosts the server
+        session_name: pibot
+        # Working directory to cd into before starting the server
+        work_dir: /home/orangepi/workspace/pibot
+        # Command used to launch the server
+        start_command: go run cmd/server/main.go
