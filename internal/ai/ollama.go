@@ -144,17 +144,28 @@ func (p *OllamaProvider) StreamChat(ctx context.Context, messages []Message, ch 
 
 	scanner := bufio.NewScanner(resp.Body)
 	for scanner.Scan() {
+		// Check for cancellation between chunks.
+		if ctx.Err() != nil {
+			return nil
+		}
 		var chatResp ollamaChatResponse
 		if err := json.Unmarshal(scanner.Bytes(), &chatResp); err != nil {
 			continue
 		}
 		if chatResp.Message.Content != "" {
-			ch <- chatResp.Message.Content
+			select {
+			case ch <- chatResp.Message.Content:
+			case <-ctx.Done():
+				return nil
+			}
 		}
 		if chatResp.Done {
 			break
 		}
 	}
 
+	if ctx.Err() != nil {
+		return nil
+	}
 	return scanner.Err()
 }

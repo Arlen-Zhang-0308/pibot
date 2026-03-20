@@ -185,9 +185,9 @@
                                     <textarea
                                         v-model="chatInput"
                                         ref="chatInputEl"
-                                        placeholder="Send a message... (Enter to send, Shift+Enter to new line)"
+                                        :placeholder="isStreaming ? 'Generating… press stop to cancel' : 'Send a message... (Enter to send, Shift+Enter to new line)'"
                                         rows="1"
-                                        @keydown.enter.exact.prevent="sendChatMessage"
+                                        @keydown.enter.exact.prevent="!isStreaming && sendChatMessage()"
                                         @input="autoResizeTextarea"
                                         @focus="chatFocused = true"
                                         @blur="chatFocused = false"
@@ -203,7 +203,12 @@
                                             <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
                                         </svg>
                                     </button>
-                                    <button type="submit" class="send-btn" :class="{ active: chatInput.trim() && wsConnected }" :disabled="!chatInput.trim() || !wsConnected">
+                                    <button v-if="isStreaming" type="button" class="send-btn terminate" @click="abortCompletion" title="Stop generation">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                                            <rect x="4" y="4" width="16" height="16" rx="2"/>
+                                        </svg>
+                                    </button>
+                                    <button v-else type="submit" class="send-btn" :class="{ active: chatInput.trim() && wsConnected }" :disabled="!chatInput.trim() || !wsConnected">
                                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                             <line x1="22" y1="2" x2="11" y2="13"/>
                                             <polygon points="22 2 15 22 11 13 2 9 22 2"/>
@@ -536,8 +541,14 @@
                             </div>
                             <div class="skills-loading" v-if="skillsLoading">Loading skills…</div>
                             <div class="skills-grid" v-if="installedSkills.length > 0">
-                                <div class="skill-card installed" v-for="skill in installedSkills" :key="skill.dir">
-                                    <div class="skill-card-header">
+                                <div class="skill-card installed"
+                                    v-for="skill in installedSkills"
+                                    :key="skill.dir"
+                                    :class="{ clickable: !!skill.clawhub_slug }"
+                                    @click.self="skill.clawhub_slug && openClawHubPage(skill.clawhub_slug)">
+                                    <div class="skill-card-header"
+                                        @click="skill.clawhub_slug && openClawHubPage(skill.clawhub_slug)"
+                                        :style="skill.clawhub_slug ? 'cursor:pointer' : ''">
                                         <div class="skill-card-icon instruction-only">
                                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                                 <path d="M12 2L2 7l10 5 10-5-10-5z"/>
@@ -553,11 +564,13 @@
                                             <span class="skill-card-badge local" v-else>Local</span>
                                         </div>
                                     </div>
-                                    <p class="skill-card-desc">{{ skill.description }}</p>
+                                    <p class="skill-card-desc"
+                                        @click="skill.clawhub_slug && openClawHubPage(skill.clawhub_slug)"
+                                        :style="skill.clawhub_slug ? 'cursor:pointer' : ''">{{ skill.description }}</p>
                                     <div class="skill-card-actions">
                                         <button class="btn btn-danger btn-sm"
                                             :disabled="uninstallingSkill === skill.dir"
-                                            @click="uninstallSkill(skill.dir)">
+                                            @click.stop="uninstallSkill(skill.dir)">
                                             {{ uninstallingSkill === skill.dir ? 'Removing…' : 'Uninstall' }}
                                         </button>
                                     </div>
@@ -591,7 +604,10 @@
                                 <p>Search the ClawHub marketplace to find and install skills.</p>
                             </div>
                             <div class="skills-grid" v-if="clawHubResults.length > 0">
-                                <div class="skill-card marketplace" v-for="skill in clawHubResults" :key="skill.slug">
+                                <div class="skill-card marketplace clickable"
+                                    v-for="skill in clawHubResults"
+                                    :key="skill.slug"
+                                    @click="openClawHubPage(skill.slug)">
                                     <div class="skill-card-header">
                                         <div class="skill-card-icon clawhub">
                                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -606,14 +622,25 @@
                                         </div>
                                     </div>
                                     <p class="skill-card-desc">{{ skill.summary }}</p>
-                                    <div class="skill-card-actions">
-                                        <button class="btn btn-primary btn-sm"
-                                            :disabled="installingSkill === skill.slug || isSkillInstalled(skill.slug)"
-                                            @click="installSkill(skill.slug)">
-                                            <span v-if="isSkillInstalled(skill.slug)">Installed</span>
-                                            <span v-else-if="installingSkill === skill.slug">Installing…</span>
-                                            <span v-else>Install</span>
-                                        </button>
+                                    <div class="skill-card-footer">
+                                        <span class="skill-card-installs" v-if="skill.installsCurrent != null">
+                                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                                                <circle cx="9" cy="7" r="4"/>
+                                                <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+                                                <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+                                            </svg>
+                                            {{ skill.installsCurrent.toLocaleString() }} installs
+                                        </span>
+                                        <div class="skill-card-actions">
+                                            <button class="btn btn-primary btn-sm"
+                                                :disabled="installingSkill === skill.slug || isSkillInstalled(skill.slug)"
+                                                @click.stop="installSkill(skill.slug)">
+                                                <span v-if="isSkillInstalled(skill.slug)">Installed</span>
+                                                <span v-else-if="installingSkill === skill.slug">Installing…</span>
+                                                <span v-else>Install</span>
+                                            </button>
+                                        </div>
                                     </div>
                                 </div>
                             </div>

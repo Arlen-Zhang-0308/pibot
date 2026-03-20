@@ -72,10 +72,16 @@ func (p *AnthropicProvider) StreamChat(ctx context.Context, messages []Message, 
 		},
 		OnContentBlockDelta: func(data anthropic.MessagesEventContentBlockDeltaData) {
 			if data.Delta.Type == anthropic.MessagesContentTypeTextDelta && data.Delta.Text != nil {
-				ch <- *data.Delta.Text
+				select {
+				case ch <- *data.Delta.Text:
+				case <-ctx.Done():
+				}
 			}
 		},
 	})
+	if err != nil && ctx.Err() != nil {
+		return nil
+	}
 	return err
 }
 

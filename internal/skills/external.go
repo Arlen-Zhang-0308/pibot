@@ -96,6 +96,7 @@ func (s *ExternalSkill) Execute(ctx context.Context, params json.RawMessage) (st
 
 	cmd := exec.CommandContext(ctx, s.execPath)
 	cmd.Dir = s.skillDir
+	cmd.Env = os.Environ() // explicitly inherit the full server environment
 	cmd.Stdin = bytes.NewReader(params)
 
 	var stdout, stderr bytes.Buffer
@@ -272,6 +273,12 @@ func ListInstalledSkills(skillsDir string) ([]InstalledSkillInfo, error) {
 		skillDir := filepath.Join(expanded, entry.Name())
 		manifest, _, err := readManifest(skillDir)
 		if err != nil {
+			// No manifest found — still surface the directory with fallback metadata.
+			infos = append(infos, InstalledSkillInfo{
+				Name:        entry.Name(),
+				Description: "(no description — manifest file missing)",
+				Dir:         entry.Name(),
+			})
 			continue
 		}
 		infos = append(infos, InstalledSkillInfo{
@@ -286,13 +293,29 @@ func ListInstalledSkills(skillsDir string) ([]InstalledSkillInfo, error) {
 	return infos, nil
 }
 
-// readManifest loads manifest from skill.yaml or skill.md (YAML frontmatter).
-// Returns manifest, raw file content (for .md the full file), and error.
+// clawMetaFile is the JSON metadata file included in ClawHub skill zips.
+type clawMetaFile struct {
+	Name        string `json:"name"`
+	DisplayName string `json:"displayName"`
+	Description string `json:"description"`
+	Summary     string `json:"summary"`
+	Version     string `json:"version"`
+	Slug        string `json:"slug"`
+	Entry       string `json:"entry"`
+}
+
+// readManifest loads a skill manifest from the skill directory.
+// It tries the following sources in order:
+//  1. skill.yaml  — pibot YAML manifest
+//  2. skill.md    — markdown with YAML frontmatter
+//  3. meta        — ClawHub JSON metadata file (as shipped in the zip)
+//
+// Returns manifest, raw file content (populated for .md; nil otherwise), and error.
 func readManifest(skillDir string) (ExternalSkillManifest, []byte, error) {
 	var manifest ExternalSkillManifest
-	yamlPath := filepath.Join(skillDir, "skill.yaml")
-	mdPath := filepath.Join(skillDir, "skill.md")
 
+	// 1. skill.yaml
+	yamlPath := filepath.Join(skillDir, "skill.yaml")
 	data, err := os.ReadFile(yamlPath)
 	if err == nil {
 		if err := yaml.Unmarshal(data, &manifest); err != nil {
@@ -304,21 +327,48 @@ func readManifest(skillDir string) (ExternalSkillManifest, []byte, error) {
 		return manifest, nil, fmt.Errorf("reading skill.yaml: %w", err)
 	}
 
+	// 2. skill.md (YAML frontmatter)
+	mdPath := filepath.Join(skillDir, "skill.md")
 	data, err = os.ReadFile(mdPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return manifest, nil, fmt.Errorf("missing skill.yaml or skill.md: %w", err)
+	if err == nil {
+		frontmatter, err := parseYAMLFrontmatter(data)
+		if err != nil {
+			return manifest, nil, fmt.Errorf("invalid skill.md frontmatter: %w", err)
 		}
+		if err := yaml.Unmarshal(frontmatter, &manifest); err != nil {
+			return manifest, nil, fmt.Errorf("invalid skill.md frontmatter: %w", err)
+		}
+		return manifest, data, nil
+	}
+	if !os.IsNotExist(err) {
 		return manifest, nil, fmt.Errorf("reading skill.md: %w", err)
 	}
-	frontmatter, err := parseYAMLFrontmatter(data)
+
+	// 3. meta (ClawHub JSON metadata shipped in the zip)
+	metaPath := filepath.Join(skillDir, "meta")
+	data, err = os.ReadFile(metaPath)
 	if err != nil {
-		return manifest, nil, fmt.Errorf("invalid skill.md frontmatter: %w", err)
+		if os.IsNotExist(err) {
+			return manifest, nil, fmt.Errorf("missing skill.yaml, skill.md, or meta file")
+		}
+		return manifest, nil, fmt.Errorf("reading meta: %w", err)
 	}
-	if err := yaml.Unmarshal(frontmatter, &manifest); err != nil {
-		return manifest, nil, fmt.Errorf("invalid skill.md frontmatter: %w", err)
+	var claw clawMetaFile
+	if err := json.Unmarshal(data, &claw); err != nil {
+		return manifest, nil, fmt.Errorf("invalid meta JSON: %w", err)
 	}
-	return manifest, data, nil
+	manifest.Name = claw.DisplayName
+	if manifest.Name == "" {
+		manifest.Name = claw.Name
+	}
+	manifest.Description = claw.Description
+	if manifest.Description == "" {
+		manifest.Description = claw.Summary
+	}
+	manifest.InstructionOnly = true
+	manifest.ClawHubSlug = claw.Slug
+	manifest.ClawHubVersion = claw.Version
+	return manifest, nil, nil
 }
 
 // parseYAMLFrontmatter extracts the first --- ... --- block from md content.
@@ -360,8 +410,16 @@ func resolveExecutable(skillDir, hint string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("cannot read skill directory: %w", err)
 	}
+	skipFiles := map[string]bool{
+		"skill.yaml": true,
+		"skill.md":   true,
+		"SKILL.md":   true,
+		"meta":       true,
+		"README.md":  true,
+		"readme.md":  true,
+	}
 	for _, e := range entries {
-		if e.IsDir() || e.Name() == "skill.yaml" || e.Name() == "skill.md" {
+		if e.IsDir() || skipFiles[e.Name()] {
 			continue
 		}
 		p := filepath.Join(skillDir, e.Name())

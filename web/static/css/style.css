@@ -493,6 +493,25 @@ body {
     height: 17px;
 }
 
+.send-btn.terminate {
+    background: linear-gradient(135deg, var(--accent-danger), #c0392b);
+    border-color: transparent;
+    color: white;
+    box-shadow: 0 2px 8px rgba(220, 53, 69, 0.4);
+    cursor: pointer;
+    opacity: 1;
+}
+
+.send-btn.terminate:hover {
+    transform: scale(1.08);
+    box-shadow: 0 4px 12px rgba(220, 53, 69, 0.55);
+}
+
+.send-btn.terminate svg {
+    width: 14px;
+    height: 14px;
+}
+
 /* Terminal View */
 .terminal-container {
     display: flex;
@@ -1792,4 +1811,38 @@ body {
 @keyframes slideUp {
     from { transform: translateY(20px); opacity: 0; }
     to   { transform: translateY(0);    opacity: 1; }
+}
+
+/* ── Skills card enhancements ─────────────────────────────────── */
+.skill-card.clickable {
+    cursor: pointer;
+}
+
+.skill-card.clickable:hover {
+    border-color: var(--accent-primary);
+    box-shadow: 0 2px 16px rgba(0,0,0,0.2);
+    transform: translateY(-1px);
+    transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
+}
+
+.skill-card-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 4px;
+    gap: 8px;
+}
+
+.skill-card-installs {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+}
+
+.skill-card-installs svg {
+    width: 13px;
+    height: 13px;
+    flex-shrink: 0;
 }

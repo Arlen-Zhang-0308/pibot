@@ -58,6 +58,9 @@ createApp({
                 case 'pending':
                     handlePendingCommand(msg.payload);
                     break;
+                case 'abort_ack':
+                    pendingQueue.value = [];
+                    break;
                 case 'error':
                     console.error('Server error:', msg.payload.error);
                     break;
@@ -72,6 +75,8 @@ createApp({
         const chatInputEl = ref(null);
         const currentProvider = ref('qwen');
         const alwaysAllow = ref(false);
+        const isStreaming = ref(false);
+        let currentStreamId = null;
 
         function toggleAlwaysAllow() {
             alwaysAllow.value = !alwaysAllow.value;
@@ -98,7 +103,14 @@ createApp({
             sendChatMessage();
         }
 
+        function abortCompletion() {
+            if (!ws || ws.readyState !== WebSocket.OPEN) return;
+            ws.send(JSON.stringify({ type: 'abort', payload: {} }));
+            // The backend will send stream_end which will reset isStreaming via handleStreamEnd.
+        }
+
         function sendChatMessage() {
+            if (isStreaming.value) return;
             const content = chatInput.value.trim();
             if (!content || !ws || ws.readyState !== WebSocket.OPEN) return;
 
@@ -116,6 +128,9 @@ createApp({
             const history = messages.value
                 .filter(m => !m.loading)
                 .map(m => ({ role: m.role, content: m.content }));
+
+            isStreaming.value = true;
+            currentStreamId = msgId;
 
             ws.send(JSON.stringify({
                 type: 'chat',
@@ -136,6 +151,10 @@ createApp({
             const msg = messages.value.find(m => m.id === id);
             if (msg) {
                 msg.loading = false;
+            }
+            if (currentStreamId === id) {
+                currentStreamId = null;
+                isStreaming.value = false;
             }
         }
 
@@ -664,6 +683,10 @@ createApp({
             return installedSkills.value.some(s => s.clawhub_slug === slug);
         }
 
+        function openClawHubPage(slug) {
+            window.open('https://clawhub.ai/skills/' + encodeURIComponent(slug), '_blank', 'noopener,noreferrer');
+        }
+
         async function searchClawHub() {
             const q = skillSearchQuery.value.trim();
             if (!q) return;
@@ -678,7 +701,26 @@ createApp({
                     return;
                 }
                 const data = await resp.json();
-                clawHubResults.value = data.results || [];
+                const results = data.results || [];
+                clawHubResults.value = results;
+
+                // Enrich results with install counts from detail API (fire-and-forget per result).
+                results.forEach((skill, idx) => {
+                    fetch('/api/skills/clawhub/' + encodeURIComponent(skill.slug))
+                        .then(r => r.ok ? r.json() : null)
+                        .then(detail => {
+                            if (detail && detail.skill && detail.skill.stats) {
+                                // Mutate the array entry reactively.
+                                clawHubResults.value[idx] = {
+                                    ...clawHubResults.value[idx],
+                                    installsCurrent: detail.skill.stats.installsCurrent,
+                                    installsAllTime: detail.skill.stats.installsAllTime,
+                                    stars: detail.skill.stats.stars,
+                                };
+                            }
+                        })
+                        .catch(() => {});
+                });
             } catch (err) {
                 clawHubError.value = 'Search request failed: ' + err.message;
             } finally {
@@ -740,7 +782,9 @@ createApp({
             chatFocused,
             chatMessagesEl,
             chatInputEl,
+            isStreaming,
             sendChatMessage,
+            abortCompletion,
             quickAction,
             autoResizeTextarea,
             renderMarkdown,
@@ -806,6 +850,7 @@ createApp({
             searchClawHub,
             installSkill,
             uninstallSkill,
+            openClawHubPage,
         };
     }
 }).mount('#app');

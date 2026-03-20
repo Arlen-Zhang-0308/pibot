@@ -34,12 +34,12 @@ type ClawHubSkillSummary struct {
 
 // ClawHubStats holds skill statistics.
 type ClawHubStats struct {
-	Comments       int `json:"comments"`
-	Downloads      int `json:"downloads"`
+	Comments        int `json:"comments"`
+	Downloads       int `json:"downloads"`
 	InstallsAllTime int `json:"installsAllTime"`
 	InstallsCurrent int `json:"installsCurrent"`
-	Stars          int `json:"stars"`
-	Versions       int `json:"versions"`
+	Stars           int `json:"stars"`
+	Versions        int `json:"versions"`
 }
 
 // ClawHubVersion holds version-specific info.
@@ -59,12 +59,12 @@ type ClawHubOwner struct {
 // ClawHubSkillDetail is the full skill metadata from the ClawHub detail API.
 type ClawHubSkillDetail struct {
 	Skill struct {
-		Slug        string            `json:"slug"`
-		DisplayName string            `json:"displayName"`
-		Summary     string            `json:"summary"`
-		Stats       ClawHubStats      `json:"stats"`
-		CreatedAt   int64             `json:"createdAt"`
-		UpdatedAt   int64             `json:"updatedAt"`
+		Slug        string       `json:"slug"`
+		DisplayName string       `json:"displayName"`
+		Summary     string       `json:"summary"`
+		Stats       ClawHubStats `json:"stats"`
+		CreatedAt   int64        `json:"createdAt"`
+		UpdatedAt   int64        `json:"updatedAt"`
 	} `json:"skill"`
 	LatestVersion ClawHubVersion `json:"latestVersion"`
 	Owner         ClawHubOwner   `json:"owner"`
@@ -112,19 +112,15 @@ func GetClawHubSkill(slug string) (*ClawHubSkillDetail, error) {
 	return &detail, nil
 }
 
-// DownloadAndInstall downloads a ClawHub skill by slug, extracts it into
-// skillsDir/<slug>/, and writes a pibot-compatible skill.yaml manifest.
+// DownloadAndInstall downloads a ClawHub skill by slug and extracts the zip
+// as-is into skillsDir/<slug>/. No additional manifest or markdown files are
+// generated; the original zip contents (meta, SKILL.md, scripts/, etc.) are
+// preserved exactly as packaged by ClawHub.
 // Returns the installed skill directory path.
 func DownloadAndInstall(slug, skillsDir string) (string, error) {
 	expanded := expandHome(skillsDir)
 	if err := os.MkdirAll(expanded, 0755); err != nil {
 		return "", fmt.Errorf("cannot create skills directory: %w", err)
-	}
-
-	// Fetch skill metadata first for display name and description.
-	detail, err := GetClawHubSkill(slug)
-	if err != nil {
-		return "", fmt.Errorf("cannot fetch skill metadata: %w", err)
 	}
 
 	// Download the skill zip.
@@ -149,21 +145,32 @@ func DownloadAndInstall(slug, skillsDir string) (string, error) {
 		return "", fmt.Errorf("cannot create skill directory: %w", err)
 	}
 
-	// Extract all files from the zip.
+	// Extract all entries from the zip preserving the directory structure.
 	zipReader, err := zip.NewReader(bytes.NewReader(zipData), int64(len(zipData)))
 	if err != nil {
 		return "", fmt.Errorf("parsing zip failed: %w", err)
 	}
 
-	var skillMDContent string
 	for _, f := range zipReader.File {
-		name := filepath.Base(f.Name)
-		// Only extract recognised skill files; skip directories.
+		// Clean the entry name and ensure it stays within skillDir.
+		entryPath := filepath.Join(skillDir, filepath.FromSlash(f.Name))
+		if !strings.HasPrefix(entryPath, filepath.Clean(skillDir)+string(os.PathSeparator)) &&
+			entryPath != filepath.Clean(skillDir) {
+			return "", fmt.Errorf("zip entry %q would escape skill directory", f.Name)
+		}
+
 		if f.FileInfo().IsDir() {
+			if err := os.MkdirAll(entryPath, 0755); err != nil {
+				return "", fmt.Errorf("creating directory %q: %w", entryPath, err)
+			}
 			continue
 		}
 
-		destPath := filepath.Join(skillDir, name)
+		// Ensure parent directory exists for file entries.
+		if err := os.MkdirAll(filepath.Dir(entryPath), 0755); err != nil {
+			return "", fmt.Errorf("creating parent directory for %q: %w", entryPath, err)
+		}
+
 		rc, err := f.Open()
 		if err != nil {
 			return "", fmt.Errorf("opening zip entry %q: %w", f.Name, err)
@@ -174,42 +181,12 @@ func DownloadAndInstall(slug, skillsDir string) (string, error) {
 			return "", fmt.Errorf("reading zip entry %q: %w", f.Name, err)
 		}
 
-		if err := os.WriteFile(destPath, data, 0644); err != nil {
-			return "", fmt.Errorf("writing %q: %w", destPath, err)
+		mode := f.Mode()
+		if mode == 0 {
+			mode = 0644
 		}
-
-		// Capture SKILL.md / instructions.md content for the pibot skill.md.
-		upperName := strings.ToUpper(name)
-		if upperName == "SKILL.MD" || upperName == "INSTRUCTIONS.MD" {
-			skillMDContent = string(data)
-		}
-	}
-
-	// Write pibot-compatible skill.yaml manifest (instruction-only skill).
-	description := detail.Skill.Summary
-	if description == "" {
-		description = fmt.Sprintf("ClawHub skill: %s", detail.Skill.DisplayName)
-	}
-
-	manifest := fmt.Sprintf("name: %q\ndescription: %q\ninstruction_only: true\nclawhub_slug: %q\nclawhub_version: %q\n",
-		detail.Skill.DisplayName,
-		description,
-		slug,
-		detail.LatestVersion.Version,
-	)
-	if err := os.WriteFile(filepath.Join(skillDir, "skill.yaml"), []byte(manifest), 0644); err != nil {
-		return "", fmt.Errorf("writing skill.yaml: %w", err)
-	}
-
-	// Write skill.md with YAML frontmatter + ClawHub instructions if we got them.
-	if skillMDContent != "" {
-		pibotSkillMD := fmt.Sprintf("---\nname: %q\ndescription: %q\ninstruction_only: true\n---\n\n%s",
-			detail.Skill.DisplayName,
-			description,
-			skillMDContent,
-		)
-		if err := os.WriteFile(filepath.Join(skillDir, "skill.md"), []byte(pibotSkillMD), 0644); err != nil {
-			return "", fmt.Errorf("writing skill.md: %w", err)
+		if err := os.WriteFile(entryPath, data, mode); err != nil {
+			return "", fmt.Errorf("writing %q: %w", entryPath, err)
 		}
 	}
 

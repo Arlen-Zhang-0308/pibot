@@ -62,10 +62,17 @@ func (p *openAICompatibleProvider) StreamChat(ctx context.Context, messages []Me
 			return nil
 		}
 		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
 			return err
 		}
-		if len(response.Choices) > 0 {
-			ch <- response.Choices[0].Delta.Content
+		if len(response.Choices) > 0 && response.Choices[0].Delta.Content != "" {
+			select {
+			case ch <- response.Choices[0].Delta.Content:
+			case <-ctx.Done():
+				return nil
+			}
 		}
 	}
 }

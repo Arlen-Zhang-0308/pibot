@@ -361,6 +361,11 @@ func (s *ChatSession) streamChatWithNativeTools(ctx context.Context, providerNam
 
 	// Tool calling loop with streaming
 	for iteration := 0; iteration < MaxToolIterations; iteration++ {
+		// Check for cancellation at the top of each iteration.
+		if ctx.Err() != nil {
+			return nil
+		}
+
 		log.Printf("[ai] stream native tool loop iteration=%d provider=%s", iteration+1, providerName)
 
 		stream, err := client.CreateChatCompletionStream(ctx, openai.ChatCompletionRequest{
@@ -386,6 +391,10 @@ func (s *ChatSession) streamChatWithNativeTools(ctx context.Context, providerNam
 			}
 			if err != nil {
 				stream.Close()
+				// Treat context cancellation (abort) as a clean stop.
+				if ctx.Err() != nil {
+					return nil
+				}
 				return err
 			}
 
@@ -394,7 +403,12 @@ func (s *ChatSession) streamChatWithNativeTools(ctx context.Context, providerNam
 
 				// Stream content chunks
 				if delta.Content != "" {
-					ch <- delta.Content
+					select {
+					case ch <- delta.Content:
+					case <-ctx.Done():
+						stream.Close()
+						return nil
+					}
 					contentBuilder.WriteString(delta.Content)
 				}
 
@@ -428,6 +442,11 @@ func (s *ChatSession) streamChatWithNativeTools(ctx context.Context, providerNam
 			}
 		}
 		stream.Close()
+
+		// If aborted while the stream was draining, stop before executing any tool calls.
+		if ctx.Err() != nil {
+			return nil
+		}
 
 		// Convert map to slice
 		for _, tc := range toolCallsMap {
@@ -501,7 +520,14 @@ func (s *ChatSession) streamChatWithPromptBasedTools(ctx context.Context, provid
 		// Collect and forward chunks
 		for chunk := range responseCh {
 			responseBuilder.WriteString(chunk)
-			ch <- chunk
+			select {
+			case ch <- chunk:
+			case <-ctx.Done():
+				return nil
+			}
+		}
+		if ctx.Err() != nil {
+			return nil
 		}
 
 		fullResponse := responseBuilder.String()

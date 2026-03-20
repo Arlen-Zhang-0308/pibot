@@ -32,6 +32,14 @@ func main() {
 
 	log.Printf("Configuration loaded from %s", *configPath)
 
+	// Inject environment variables defined in the config into the process environment.
+	if err := cfg.InjectEnv(); err != nil {
+		log.Fatalf("Failed to inject environment variables: %v", err)
+	}
+	if envVars := cfg.GetEnv(); len(envVars) > 0 {
+		log.Printf("Injected %d environment variable(s) from config", len(envVars))
+	}
+
 	// Initialize AI manager with all providers
 	aiManager := ai.NewManager(cfg)
 	aiManager.RegisterProvider(ai.NewOpenAIProvider(cfg))

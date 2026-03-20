@@ -87,10 +87,17 @@ func (p *GoogleProvider) StreamChat(ctx context.Context, messages []Message, ch 
 			return nil
 		}
 		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
 			return err
 		}
 		if text := extractGeminiText(resp.Candidates); text != "" {
-			ch <- text
+			select {
+			case ch <- text:
+			case <-ctx.Done():
+				return nil
+			}
 		}
 	}
 }

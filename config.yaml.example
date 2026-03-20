@@ -91,4 +91,8 @@ prompts:
     enable_tools: true
 # Path to directory containing external skills (default: ~/.pibot_skills)
 # Each subdirectory should contain a skill.yaml manifest and an executable file.
-skills_path: ~/.pibot_skills
+skills_path: ~/.pibot-workspace/skills
+# Environment variables injected into the process at startup.
+# Use this to set API keys or other secrets without hardcoding them in ai: sections.
+env:
+    PERPLEXITY_API_KEY: your_key

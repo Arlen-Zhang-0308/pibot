@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -211,6 +212,20 @@ func (e *Executor) takeGate(pendingID string) chan bool {
 	return ch
 }
 
+// CancelAll denies every pending gate and removes all pending commands.
+// Called when the user aborts a chat completion so no orphaned gates remain.
+func (e *Executor) CancelAll() {
+	e.gateMu.Lock()
+	gates := e.gates
+	e.gates = make(map[string]chan bool)
+	e.gateMu.Unlock()
+
+	for id, ch := range gates {
+		e.sandbox.RemovePending(id)
+		ch <- false
+	}
+}
+
 // executeCommand actually runs the command
 func (e *Executor) executeCommand(ctx context.Context, command string, level CommandLevel) (*ExecutionResult, error) {
 	start := time.Now()
@@ -219,6 +234,7 @@ func (e *Executor) executeCommand(ctx context.Context, command string, level Com
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "bash", "-c", command)
+	cmd.Env = os.Environ() // explicitly inherit the full server environment
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -10,15 +11,18 @@ import (
 
 // Config holds all application configuration
 type Config struct {
-	Server     ServerConfig   `yaml:"server"`
-	AI         AIConfig       `yaml:"ai"`
-	Executor   ExecutorConfig `yaml:"executor"`
-	FileOps    FileOpsConfig  `yaml:"fileops"`
-	Prompts    PromptsConfig  `yaml:"prompts"`
-	SkillsPath string         `yaml:"skills_path"`
-	Reboot     RebootConfig   `yaml:"reboot"`
-	mu         sync.RWMutex   `yaml:"-"`
-	configPath string         `yaml:"-"`
+	Server     ServerConfig      `yaml:"server"`
+	AI         AIConfig          `yaml:"ai"`
+	Executor   ExecutorConfig    `yaml:"executor"`
+	FileOps    FileOpsConfig     `yaml:"fileops"`
+	Prompts    PromptsConfig     `yaml:"prompts"`
+	SkillsPath string            `yaml:"skills_path"`
+	Reboot     RebootConfig      `yaml:"reboot"`
+	// Env holds environment variables that are injected into the process
+	// environment at server startup. Each key-value pair is set via os.Setenv.
+	Env        map[string]string `yaml:"env,omitempty"`
+	mu         sync.RWMutex      `yaml:"-"`
+	configPath string            `yaml:"-"`
 }
 
 // RebootConfig holds settings for how the bot restarts itself.
@@ -266,6 +270,30 @@ func (c *Config) GetSkillsPath() string {
 	return c.SkillsPath
 }
 
+// GetEnv returns the environment variable map (thread-safe).
+func (c *Config) GetEnv() map[string]string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	result := make(map[string]string, len(c.Env))
+	for k, v := range c.Env {
+		result[k] = v
+	}
+	return result
+}
+
+// InjectEnv sets each key-value pair from the Env config section into the
+// current process environment using os.Setenv. Existing variables with the
+// same name are overwritten. Returns the first error encountered, if any.
+func (c *Config) InjectEnv() error {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	for k, v := range c.Env {
+		if err := os.Setenv(k, v); err != nil {
+			return fmt.Errorf("setting env %q: %w", k, err)
+		}
+	}
+	return nil
+}
 
 // PublicConfig returns a config safe to expose (without API keys)
 type PublicConfig struct {

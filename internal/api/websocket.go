@@ -25,6 +25,8 @@ var upgrader = websocket.Upgrader{
 const (
 	MsgTypeChat       = "chat"
 	MsgTypeExec       = "exec"
+	MsgTypeAbort      = "abort"
+	MsgTypeAbortAck   = "abort_ack"
 	MsgTypeStream     = "stream"
 	MsgTypeStreamEnd  = "stream_end"
 	MsgTypeExecResult = "exec_result"
@@ -53,10 +55,14 @@ type ExecPayload struct {
 
 // Client represents a WebSocket client
 type Client struct {
-	hub    *Hub
-	conn   *websocket.Conn
-	send   chan []byte
-	server *Server
+	hub           *Hub
+	conn          *websocket.Conn
+	send          chan []byte
+	server        *Server
+	mu            sync.Mutex
+	abortCancel   context.CancelFunc // cancels the current in-flight chat completion
+	abortStreamID uint64             // monotonic ID to match cancel to the current stream
+	nextStreamID  uint64
 }
 
 // Hub manages WebSocket clients
@@ -182,9 +188,25 @@ func (c *Client) writePump() {
 func (c *Client) handleMessage(msg WSMessage) {
 	switch msg.Type {
 	case MsgTypeChat:
-		c.handleChatMessage(msg)
+		// Run in a goroutine so readPump is free to receive abort (or other) messages
+		// while the chat completion is in progress.
+		go c.handleChatMessage(msg)
 	case MsgTypeExec:
 		c.handleExecMessage(msg)
+	case MsgTypeAbort:
+		c.mu.Lock()
+		if c.abortCancel != nil {
+			c.abortCancel()
+			c.abortCancel = nil
+		}
+		c.mu.Unlock()
+		// Cancel all pending executor gates so no confirmation dialogs remain blocked.
+		c.server.executor.CancelAll()
+		// Tell the frontend to clear its pending queue.
+		c.sendMessage(WSMessage{
+			Type:    MsgTypeAbortAck,
+			Payload: mustMarshal(map[string]string{}),
+		})
 	default:
 		c.sendError("Unknown message type")
 	}
@@ -206,7 +228,25 @@ func (c *Client) handleChatMessage(msg WSMessage) {
 	// Create a channel for streaming
 	ch := make(chan string, 100)
 	baseCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
+
+	// Register the cancel function so an abort message can stop this completion.
+	c.mu.Lock()
+	if c.abortCancel != nil {
+		c.abortCancel() // cancel any previous in-flight request
+	}
+	c.nextStreamID++
+	myStreamID := c.nextStreamID
+	c.abortCancel = cancel
+	c.abortStreamID = myStreamID
+	c.mu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		if c.abortStreamID == myStreamID {
+			c.abortCancel = nil
+		}
+		c.mu.Unlock()
+		cancel()
+	}()
 
 	// Propagate always-allow flag through context so Executor can skip pending flow.
 	ctx := context.WithValue(baseCtx, executor.AlwaysAllowKey, payload.AlwaysAllow)
@@ -231,7 +271,8 @@ func (c *Client) handleChatMessage(msg WSMessage) {
 	// Start streaming with tool support
 	go func() {
 		err := c.server.chatSession.StreamChatWithTools(ctx, provider, payload.Messages, ch)
-		if err != nil {
+		if err != nil && ctx.Err() == nil {
+			// Only forward errors that aren't due to intentional cancellation.
 			c.sendError(err.Error())
 		}
 	}()
@@ -247,12 +288,17 @@ func (c *Client) handleChatMessage(msg WSMessage) {
 		})
 	}
 
-	// Send end of stream
+	// Always send stream_end so the frontend resets its state, regardless of
+	// whether the stream completed normally or was aborted.
+	status := "complete"
+	if ctx.Err() != nil {
+		status = "aborted"
+	}
 	c.sendMessage(WSMessage{
 		Type: MsgTypeStreamEnd,
 		ID:   msg.ID,
 		Payload: mustMarshal(map[string]string{
-			"status": "complete",
+			"status": status,
 		}),
 	})
 }
