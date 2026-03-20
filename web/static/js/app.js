@@ -621,6 +621,108 @@ createApp({
             }
         }
 
+        // ── Skills ────────────────────────────────────────────────────────
+        const skillsTab = ref('installed');
+        const installedSkills = ref([]);
+        const skillsLoading = ref(false);
+        const skillSearchQuery = ref('');
+        const clawHubResults = ref([]);
+        const clawHubSearching = ref(false);
+        const clawHubError = ref('');
+        const installingSkill = ref('');
+        const uninstallingSkill = ref('');
+        const skillsToast = reactive({ visible: false, message: '', type: 'success' });
+        let skillsToastTimer = null;
+
+        function showSkillsToast(message, type = 'success') {
+            skillsToast.message = message;
+            skillsToast.type = type;
+            skillsToast.visible = true;
+            clearTimeout(skillsToastTimer);
+            skillsToastTimer = setTimeout(() => { skillsToast.visible = false; }, 3500);
+        }
+
+        async function loadInstalledSkills() {
+            skillsLoading.value = true;
+            try {
+                const resp = await fetch('/api/skills');
+                const data = await resp.json();
+                installedSkills.value = data.skills || [];
+            } catch (err) {
+                console.error('Failed to load skills:', err);
+            } finally {
+                skillsLoading.value = false;
+            }
+        }
+
+        function switchToSkills() {
+            currentView.value = 'skills';
+            loadInstalledSkills();
+        }
+
+        function isSkillInstalled(slug) {
+            return installedSkills.value.some(s => s.clawhub_slug === slug);
+        }
+
+        async function searchClawHub() {
+            const q = skillSearchQuery.value.trim();
+            if (!q) return;
+            clawHubSearching.value = true;
+            clawHubError.value = '';
+            clawHubResults.value = [];
+            try {
+                const resp = await fetch('/api/skills/search?q=' + encodeURIComponent(q));
+                if (!resp.ok) {
+                    const err = await resp.json();
+                    clawHubError.value = err.error || 'Search failed';
+                    return;
+                }
+                const data = await resp.json();
+                clawHubResults.value = data.results || [];
+            } catch (err) {
+                clawHubError.value = 'Search request failed: ' + err.message;
+            } finally {
+                clawHubSearching.value = false;
+            }
+        }
+
+        async function installSkill(slug) {
+            installingSkill.value = slug;
+            try {
+                const resp = await fetch('/api/skills/install/' + encodeURIComponent(slug), { method: 'POST' });
+                const data = await resp.json();
+                if (!resp.ok) {
+                    showSkillsToast('Install failed: ' + (data.error || 'Unknown error'), 'error');
+                    return;
+                }
+                showSkillsToast('Skill installed and registered!', 'success');
+                await loadInstalledSkills();
+            } catch (err) {
+                showSkillsToast('Install request failed: ' + err.message, 'error');
+            } finally {
+                installingSkill.value = '';
+            }
+        }
+
+        async function uninstallSkill(dirName) {
+            if (!confirm('Remove this skill? It will be unregistered immediately.')) return;
+            uninstallingSkill.value = dirName;
+            try {
+                const resp = await fetch('/api/skills/' + encodeURIComponent(dirName), { method: 'DELETE' });
+                const data = await resp.json();
+                if (!resp.ok) {
+                    showSkillsToast('Uninstall failed: ' + (data.error || 'Unknown error'), 'error');
+                    return;
+                }
+                showSkillsToast('Skill removed.', 'success');
+                await loadInstalledSkills();
+            } catch (err) {
+                showSkillsToast('Uninstall request failed: ' + err.message, 'error');
+            } finally {
+                uninstallingSkill.value = '';
+            }
+        }
+
         // ── Init ──────────────────────────────────────────────────────────
         onMounted(() => {
             setupWebSocket();
@@ -688,6 +790,22 @@ createApp({
             // reboot
             rebootServer,
             rebootStatus,
+            // skills
+            skillsTab,
+            installedSkills,
+            skillsLoading,
+            skillSearchQuery,
+            clawHubResults,
+            clawHubSearching,
+            clawHubError,
+            installingSkill,
+            uninstallingSkill,
+            skillsToast,
+            switchToSkills,
+            isSkillInstalled,
+            searchClawHub,
+            installSkill,
+            uninstallSkill,
         };
     }
 }).mount('#app');

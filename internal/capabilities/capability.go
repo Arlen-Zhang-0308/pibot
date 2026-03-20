@@ -90,6 +90,32 @@ func (r *Registry) Register(cap Capability, kind Kind) {
 	log.Printf("%s registered %s %q", kind.logTag(), kind, cap.Name())
 }
 
+// Unregister removes a capability from the registry by name.
+func (r *Registry) Unregister(name string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	e, ok := r.entries[name]
+	if !ok {
+		return false
+	}
+	delete(r.entries, name)
+	log.Printf("%s unregistered %s %q", e.kind.logTag(), string(e.kind), name)
+	return true
+}
+
+// ListByKind returns all registered capabilities of the given kind.
+func (r *Registry) ListByKind(kind Kind) []Capability {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	caps := make([]Capability, 0)
+	for _, e := range r.entries {
+		if e.kind == kind {
+			caps = append(caps, e.cap)
+		}
+	}
+	return caps
+}
+
 // Get retrieves a capability by name.
 func (r *Registry) Get(name string) (Capability, bool) {
 	r.mu.RLock()

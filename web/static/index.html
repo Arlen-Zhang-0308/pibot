@@ -55,6 +55,14 @@
                         </svg>
                         <span>Tasks</span>
                     </a>
+                    <a href="#" class="nav-item" :class="{ active: currentView === 'skills' }" @click.prevent="switchToSkills()">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+                            <path d="M2 17l10 5 10-5"/>
+                            <path d="M2 12l10 5 10-5"/>
+                        </svg>
+                        <span>Skills</span>
+                    </a>
                     <a href="#" class="nav-item" :class="{ active: currentView === 'settings' }" @click.prevent="currentView = 'settings'">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <circle cx="12" cy="12" r="3"/>
@@ -496,7 +504,129 @@
                     </div>
                 </section>
 
+                <!-- Skills View -->
+                <section class="view" :class="{ active: currentView === 'skills' }">
+                    <div class="skills-container">
+                        <div class="skills-header">
+                            <h2>Skills</h2>
+                            <p class="skills-subtitle">Extend PiBot with community skills from <a href="https://clawhub.ai" target="_blank" rel="noopener">ClawHub</a></p>
+                        </div>
+
+                        <!-- Tabs -->
+                        <div class="skills-tabs">
+                            <button class="skills-tab" :class="{ active: skillsTab === 'installed' }" @click="skillsTab = 'installed'">
+                                Installed
+                                <span class="skills-tab-count" v-if="installedSkills.length > 0">{{ installedSkills.length }}</span>
+                            </button>
+                            <button class="skills-tab" :class="{ active: skillsTab === 'marketplace' }" @click="skillsTab = 'marketplace'">
+                                Marketplace
+                            </button>
+                        </div>
+
+                        <!-- Installed Tab -->
+                        <div class="skills-tab-content" v-if="skillsTab === 'installed'">
+                            <div class="skills-empty" v-if="installedSkills.length === 0 && !skillsLoading">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                                    <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+                                    <path d="M2 17l10 5 10-5"/>
+                                    <path d="M2 12l10 5 10-5"/>
+                                </svg>
+                                <p>No skills installed yet.</p>
+                                <button class="btn btn-primary" @click="skillsTab = 'marketplace'">Browse Marketplace</button>
+                            </div>
+                            <div class="skills-loading" v-if="skillsLoading">Loading skills…</div>
+                            <div class="skills-grid" v-if="installedSkills.length > 0">
+                                <div class="skill-card installed" v-for="skill in installedSkills" :key="skill.dir">
+                                    <div class="skill-card-header">
+                                        <div class="skill-card-icon instruction-only">
+                                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+                                                <path d="M2 17l10 5 10-5"/>
+                                                <path d="M2 12l10 5 10-5"/>
+                                            </svg>
+                                        </div>
+                                        <div class="skill-card-meta">
+                                            <h3 class="skill-card-name">{{ skill.name }}</h3>
+                                            <span class="skill-card-badge" v-if="skill.clawhub_slug">
+                                                ClawHub · {{ skill.clawhub_version || 'latest' }}
+                                            </span>
+                                            <span class="skill-card-badge local" v-else>Local</span>
+                                        </div>
+                                    </div>
+                                    <p class="skill-card-desc">{{ skill.description }}</p>
+                                    <div class="skill-card-actions">
+                                        <button class="btn btn-danger btn-sm"
+                                            :disabled="uninstallingSkill === skill.dir"
+                                            @click="uninstallSkill(skill.dir)">
+                                            {{ uninstallingSkill === skill.dir ? 'Removing…' : 'Uninstall' }}
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Marketplace Tab -->
+                        <div class="skills-tab-content" v-if="skillsTab === 'marketplace'">
+                            <div class="skills-search-bar">
+                                <input
+                                    type="text"
+                                    v-model="skillSearchQuery"
+                                    placeholder="Search ClawHub skills…"
+                                    @keydown.enter.prevent="searchClawHub"
+                                    class="skills-search-input"
+                                />
+                                <button class="btn btn-primary" @click="searchClawHub" :disabled="clawHubSearching">
+                                    {{ clawHubSearching ? 'Searching…' : 'Search' }}
+                                </button>
+                            </div>
+                            <p class="skills-search-error" v-if="clawHubError">{{ clawHubError }}</p>
+                            <div class="skills-empty" v-if="clawHubResults.length === 0 && !clawHubSearching && !clawHubError && skillSearchQuery">
+                                No results found for "{{ skillSearchQuery }}".
+                            </div>
+                            <div class="skills-empty" v-if="clawHubResults.length === 0 && !clawHubSearching && !clawHubError && !skillSearchQuery">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                                    <circle cx="11" cy="11" r="8"/>
+                                    <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                                </svg>
+                                <p>Search the ClawHub marketplace to find and install skills.</p>
+                            </div>
+                            <div class="skills-grid" v-if="clawHubResults.length > 0">
+                                <div class="skill-card marketplace" v-for="skill in clawHubResults" :key="skill.slug">
+                                    <div class="skill-card-header">
+                                        <div class="skill-card-icon clawhub">
+                                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+                                                <path d="M2 17l10 5 10-5"/>
+                                                <path d="M2 12l10 5 10-5"/>
+                                            </svg>
+                                        </div>
+                                        <div class="skill-card-meta">
+                                            <h3 class="skill-card-name">{{ skill.displayName }}</h3>
+                                            <span class="skill-card-slug">{{ skill.slug }}</span>
+                                        </div>
+                                    </div>
+                                    <p class="skill-card-desc">{{ skill.summary }}</p>
+                                    <div class="skill-card-actions">
+                                        <button class="btn btn-primary btn-sm"
+                                            :disabled="installingSkill === skill.slug || isSkillInstalled(skill.slug)"
+                                            @click="installSkill(skill.slug)">
+                                            <span v-if="isSkillInstalled(skill.slug)">Installed</span>
+                                            <span v-else-if="installingSkill === skill.slug">Installing…</span>
+                                            <span v-else>Install</span>
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
             </main>
+        </div>
+
+        <!-- Skill Install/Error notification -->
+        <div class="skills-toast" v-if="skillsToast.visible" :class="skillsToast.type">
+            {{ skillsToast.message }}
         </div>
 
         <!-- Task Create/Edit Modal -->

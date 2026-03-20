@@ -16,12 +16,25 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// InstalledSkillInfo describes an installed external skill for API responses.
+type InstalledSkillInfo struct {
+	Name            string `json:"name"`
+	Description     string `json:"description"`
+	Dir             string `json:"dir"`
+	InstructionOnly bool   `json:"instruction_only"`
+	ClawHubSlug     string `json:"clawhub_slug,omitempty"`
+	ClawHubVersion  string `json:"clawhub_version,omitempty"`
+}
+
 // ExternalSkillManifest describes an external skill loaded from ~/.pibot_skills
 type ExternalSkillManifest struct {
-	Name        string                 `yaml:"name"`
-	Description string                 `yaml:"description"`
-	Parameters  map[string]interface{} `yaml:"parameters"`
-	Executable  string                 `yaml:"executable"`
+	Name            string                 `yaml:"name"`
+	Description     string                 `yaml:"description"`
+	Parameters      map[string]interface{} `yaml:"parameters"`
+	Executable      string                 `yaml:"executable"`
+	InstructionOnly bool                   `yaml:"instruction_only"`
+	ClawHubSlug     string                 `yaml:"clawhub_slug"`
+	ClawHubVersion  string                 `yaml:"clawhub_version"`
 }
 
 // ExternalSkill wraps a script/executable as a Skill
@@ -29,6 +42,38 @@ type ExternalSkill struct {
 	manifest   ExternalSkillManifest
 	execPath   string
 	skillDir   string
+}
+
+// InstructionOnlySkill is an external skill backed by a markdown instructions
+// file (no executable). The AI receives the instructions as tool output, which
+// guides its behavior for that capability.
+type InstructionOnlySkill struct {
+	manifest     ExternalSkillManifest
+	instructions string
+	skillDir     string
+}
+
+func (s *InstructionOnlySkill) Name() string        { return s.manifest.Name }
+func (s *InstructionOnlySkill) Description() string { return s.manifest.Description }
+func (s *InstructionOnlySkill) Parameters() map[string]interface{} {
+	return map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"query": map[string]interface{}{
+				"type":        "string",
+				"description": "What you want to do or know with this skill",
+			},
+		},
+		"required": []string{"query"},
+	}
+}
+
+// Execute returns the skill's instructions as context so the AI can apply them.
+func (s *InstructionOnlySkill) Execute(_ context.Context, _ json.RawMessage) (string, error) {
+	if s.instructions != "" {
+		return s.instructions, nil
+	}
+	return fmt.Sprintf("Skill %q is active. Description: %s", s.manifest.Name, s.manifest.Description), nil
 }
 
 func (s *ExternalSkill) Name() string        { return s.manifest.Name }
@@ -124,10 +169,12 @@ func LoadExternalSkills(registry *capabilities.Registry, skillsDir string) error
 	return nil
 }
 
-// loadExternalSkill reads a skill directory and returns an ExternalSkill.
+// loadExternalSkill reads a skill directory and returns a Capability.
+// For instruction-only skills (no executable required) it returns an
+// InstructionOnlySkill; otherwise it returns an ExternalSkill.
 // Manifest is read from skill.yaml, or from skill.md (YAML frontmatter).
-func loadExternalSkill(skillDir string) (*ExternalSkill, error) {
-	manifest, _, err := readManifest(skillDir)
+func loadExternalSkill(skillDir string) (capabilities.Capability, error) {
+	manifest, rawContent, err := readManifest(skillDir)
 	if err != nil {
 		return nil, err
 	}
@@ -137,6 +184,16 @@ func loadExternalSkill(skillDir string) (*ExternalSkill, error) {
 	}
 	if manifest.Description == "" {
 		return nil, fmt.Errorf("manifest must specify a description")
+	}
+
+	// Instruction-only mode: no executable needed.
+	if manifest.InstructionOnly {
+		instructions := extractInstructions(skillDir, rawContent)
+		return &InstructionOnlySkill{
+			manifest:     manifest,
+			instructions: instructions,
+			skillDir:     skillDir,
+		}, nil
 	}
 
 	execPath, err := resolveExecutable(skillDir, manifest.Executable)
@@ -149,6 +206,84 @@ func loadExternalSkill(skillDir string) (*ExternalSkill, error) {
 		execPath: execPath,
 		skillDir: skillDir,
 	}, nil
+}
+
+// extractInstructions returns the body of a skill.md file (after frontmatter)
+// or the content of any instructions.md/SKILL.md found in the directory.
+func extractInstructions(skillDir string, rawContent []byte) string {
+	// If rawContent came from skill.md, strip the frontmatter.
+	if len(rawContent) > 0 {
+		const delim = "---"
+		lines := strings.Split(string(rawContent), "\n")
+		if len(lines) > 0 && strings.TrimSpace(lines[0]) == delim {
+			for i := 1; i < len(lines); i++ {
+				if strings.TrimSpace(lines[i]) == delim {
+					return strings.Join(lines[i+1:], "\n")
+				}
+			}
+		}
+	}
+
+	// Fall back to SKILL.md or instructions.md in the directory.
+	for _, candidate := range []string{"SKILL.md", "skill.md", "instructions.md"} {
+		data, err := os.ReadFile(filepath.Join(skillDir, candidate))
+		if err == nil {
+			return string(data)
+		}
+	}
+	return ""
+}
+
+// UnloadExternalSkill removes the named skill from the registry.
+func UnloadExternalSkill(registry *capabilities.Registry, name string) bool {
+	return registry.Unregister(name)
+}
+
+// LoadSingleSkill loads and registers one skill from the given directory.
+// If a skill with the same name is already registered it is replaced.
+func LoadSingleSkill(registry *capabilities.Registry, skillDir string) error {
+	skill, err := loadExternalSkill(skillDir)
+	if err != nil {
+		return err
+	}
+	// Remove any previous version first (idempotent install).
+	registry.Unregister(skill.Name())
+	registry.Register(skill, capabilities.KindSkill)
+	log.Printf("Hot-loaded external skill %q from %s", skill.Name(), skillDir)
+	return nil
+}
+
+// ListInstalledSkills returns metadata for every skill found in skillsDir.
+func ListInstalledSkills(skillsDir string) ([]InstalledSkillInfo, error) {
+	expanded := expandHome(skillsDir)
+	entries, err := os.ReadDir(expanded)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []InstalledSkillInfo{}, nil
+		}
+		return nil, fmt.Errorf("cannot read skills directory: %w", err)
+	}
+
+	var infos []InstalledSkillInfo
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		skillDir := filepath.Join(expanded, entry.Name())
+		manifest, _, err := readManifest(skillDir)
+		if err != nil {
+			continue
+		}
+		infos = append(infos, InstalledSkillInfo{
+			Name:            manifest.Name,
+			Description:     manifest.Description,
+			Dir:             entry.Name(),
+			InstructionOnly: manifest.InstructionOnly,
+			ClawHubSlug:     manifest.ClawHubSlug,
+			ClawHubVersion:  manifest.ClawHubVersion,
+		})
+	}
+	return infos, nil
 }
 
 // readManifest loads manifest from skill.yaml or skill.md (YAML frontmatter).

@@ -100,6 +100,13 @@ func (s *Server) setupRoutes() {
 	api.HandleFunc("/files/{path:.*}", s.handleWriteFile).Methods("POST")
 	api.HandleFunc("/files/{path:.*}", s.handleDeleteFile).Methods("DELETE")
 
+	// Skills endpoints
+	api.HandleFunc("/skills", s.handleListInstalledSkills).Methods("GET")
+	api.HandleFunc("/skills/search", s.handleSearchClawHub).Methods("GET")
+	api.HandleFunc("/skills/clawhub/{slug}", s.handleGetClawHubSkill).Methods("GET")
+	api.HandleFunc("/skills/install/{slug}", s.handleInstallSkill).Methods("POST")
+	api.HandleFunc("/skills/{name}", s.handleUninstallSkill).Methods("DELETE")
+
 	// Reboot endpoint
 	api.HandleFunc("/reboot", s.handleReboot).Methods("POST")
 
