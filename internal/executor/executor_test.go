@@ -324,3 +324,107 @@ func TestCommandLevel_String(t *testing.T) {
 		})
 	}
 }
+
+func TestCommandNeedsProxy(t *testing.T) {
+	tests := []struct {
+		name          string
+		command       string
+		proxyCommands []string
+		want          bool
+	}{
+		{
+			name:          "direct command match",
+			command:       "curl https://example.com",
+			proxyCommands: []string{"curl"},
+			want:          true,
+		},
+		{
+			name:          "non matching command",
+			command:       "ls -la",
+			proxyCommands: []string{"curl"},
+			want:          false,
+		},
+		{
+			name:          "with env assignment prefix",
+			command:       "HTTPS_PROXY=http://127.0.0.1:7890 curl https://example.com",
+			proxyCommands: []string{"curl"},
+			want:          true,
+		},
+		{
+			name:          "with sudo wrapper",
+			command:       "sudo curl https://example.com",
+			proxyCommands: []string{"curl"},
+			want:          true,
+		},
+		{
+			name:          "with sudo wrapper and flags",
+			command:       "sudo -u root curl https://example.com",
+			proxyCommands: []string{"curl"},
+			want:          true,
+		},
+		{
+			name:          "empty command",
+			command:       "   ",
+			proxyCommands: []string{"curl"},
+			want:          false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := commandNeedsProxy(tt.command, tt.proxyCommands)
+			if got != tt.want {
+				t.Fatalf("commandNeedsProxy(%q) = %v, want %v", tt.command, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestProxyEnvOverrides(t *testing.T) {
+	overrides := proxyEnvOverrides()
+
+	expected := map[string]string{
+		"http_proxy":  "${http://127.0.0.1:7890}",
+		"https_proxy": "${http://127.0.0.1:7890}",
+		"all_proxy":   "${socks5h://127.0.0.1:10808}",
+		"no_proxy":    "${localhost,127.0.0.1,::1}",
+		"HTTP_PROXY":  "${http://127.0.0.1:7890}",
+		"HTTPS_PROXY": "${http://127.0.0.1:7890}",
+		"ALL_PROXY":   "${socks5h://127.0.0.1:10808}",
+		"NO_PROXY":    "${localhost,127.0.0.1,::1}",
+	}
+
+	if len(overrides) != len(expected) {
+		t.Fatalf("expected %d proxy env keys, got %d", len(expected), len(overrides))
+	}
+	for k, v := range expected {
+		got, ok := overrides[k]
+		if !ok {
+			t.Fatalf("missing key %q", k)
+		}
+		if got != v {
+			t.Fatalf("unexpected value for %q: got %q want %q", k, got, v)
+		}
+	}
+}
+
+func TestMergeEnv(t *testing.T) {
+	base := []string{"PATH=/usr/bin", "http_proxy=old", "LANG=C"}
+	overrides := map[string]string{
+		"http_proxy": "new",
+		"HTTPS_PROXY": "new2",
+	}
+
+	merged := mergeEnv(base, overrides)
+	joined := strings.Join(merged, "\n")
+
+	if !strings.Contains(joined, "http_proxy=new") {
+		t.Fatalf("expected http_proxy override in merged env: %v", merged)
+	}
+	if !strings.Contains(joined, "HTTPS_PROXY=new2") {
+		t.Fatalf("expected HTTPS_PROXY addition in merged env: %v", merged)
+	}
+	if !strings.Contains(joined, "PATH=/usr/bin") {
+		t.Fatalf("expected PATH preserved in merged env: %v", merged)
+	}
+}

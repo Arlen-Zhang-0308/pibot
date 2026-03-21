@@ -38,6 +38,9 @@ func TestDefaultConfig(t *testing.T) {
 	if len(cfg.Executor.BlockedCommands) == 0 {
 		t.Error("Expected blocked commands to be populated")
 	}
+	if cfg.Executor.ProxyCommands == nil {
+		t.Error("Expected proxy commands list to be initialized")
+	}
 
 	// Test fileops defaults
 	if cfg.FileOps.BaseDirectory == "" {

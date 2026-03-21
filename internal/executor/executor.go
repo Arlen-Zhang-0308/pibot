@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -233,8 +234,15 @@ func (e *Executor) executeCommand(ctx context.Context, command string, level Com
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
+	execCfg := e.config.GetExecutor()
+	cmdEnv := os.Environ() // explicitly inherit the full server environment
+	if commandNeedsProxy(command, execCfg.ProxyCommands) {
+		cmdEnv = mergeEnv(cmdEnv, proxyEnvOverrides())
+		log.Printf("[exec] proxy env injected for command: %s", command)
+	}
+
 	cmd := exec.CommandContext(ctx, "bash", "-c", command)
-	cmd.Env = os.Environ() // explicitly inherit the full server environment
+	cmd.Env = cmdEnv
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -272,6 +280,114 @@ func (e *Executor) executeCommand(ctx context.Context, command string, level Com
 	}
 
 	return result, nil
+}
+
+func commandNeedsProxy(command string, proxyCommands []string) bool {
+	baseCmd := extractBaseCommand(command)
+	if baseCmd == "" {
+		return false
+	}
+	for _, c := range proxyCommands {
+		if baseCmd == c {
+			return true
+		}
+	}
+	return false
+}
+
+func extractBaseCommand(command string) string {
+	parts := strings.Fields(command)
+	if len(parts) == 0 {
+		return ""
+	}
+
+	// Skip leading env assignments like: FOO=bar HTTPS_PROXY=... curl ...
+	i := 0
+	for i < len(parts) && isEnvAssignment(parts[i]) {
+		i++
+	}
+	if i >= len(parts) {
+		return ""
+	}
+
+	// Best-effort handling for common wrapper usage: sudo [flags] <command> ...
+	if parts[i] == "sudo" {
+		i++
+		for i < len(parts) {
+			part := parts[i]
+			if part == "--" {
+				i++
+				break
+			}
+			if !strings.HasPrefix(part, "-") {
+				break
+			}
+			// Skip values for common sudo flags that take an argument.
+			if part == "-u" || part == "--user" || part == "-g" || part == "--group" ||
+				part == "-h" || part == "--host" || part == "-p" || part == "--prompt" ||
+				part == "-C" || part == "-T" || part == "-r" || part == "--role" ||
+				part == "-t" || part == "--type" || part == "-R" || part == "--chroot" {
+				i++
+			}
+			i++
+		}
+	}
+	if i >= len(parts) {
+		return ""
+	}
+
+	return filepath.Base(parts[i])
+}
+
+func isEnvAssignment(token string) bool {
+	if token == "" || strings.HasPrefix(token, "=") {
+		return false
+	}
+	eq := strings.IndexByte(token, '=')
+	return eq > 0
+}
+
+func proxyEnvOverrides() map[string]string {
+	return map[string]string{
+		"http_proxy":  "http://127.0.0.1:7890",
+		"https_proxy": "http://127.0.0.1:7890",
+		"all_proxy":   "socks5h://127.0.0.1:10808",
+		"no_proxy":    "localhost,127.0.0.1,::1",
+		"HTTP_PROXY":  "http://127.0.0.1:7890",
+		"HTTPS_PROXY": "http://127.0.0.1:7890",
+		"ALL_PROXY":   "socks5h://127.0.0.1:10808",
+		"NO_PROXY":    "localhost,127.0.0.1,::1",
+	}
+}
+
+func mergeEnv(base []string, overrides map[string]string) []string {
+	if len(overrides) == 0 {
+		return base
+	}
+
+	merged := make([]string, 0, len(base)+len(overrides))
+	seen := make(map[string]bool, len(base))
+	for _, kv := range base {
+		key, _, ok := strings.Cut(kv, "=")
+		if !ok {
+			merged = append(merged, kv)
+			continue
+		}
+		if override, exists := overrides[key]; exists {
+			merged = append(merged, key+"="+override)
+		} else {
+			merged = append(merged, kv)
+		}
+		seen[key] = true
+	}
+
+	for key, val := range overrides {
+		if !seen[key] {
+			merged = append(merged, key+"="+val)
+		}
+	}
+
+	return merged
 }
 
 // truncateLog truncates s to maxLen characters for log output, appending "…" if trimmed.

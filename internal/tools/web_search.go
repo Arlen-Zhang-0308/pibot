@@ -15,10 +15,11 @@ import (
 )
 
 const (
-	duckduckgoAPIURL   = "https://api.duckduckgo.com/"
+	duckduckgoAPIURL    = "https://api.duckduckgo.com/"
 	perplexitySearchURL = "https://api.perplexity.ai/search"
-	defaultMaxResults  = 5
-	httpTimeoutSeconds = 15
+	defaultMaxResults   = 5
+	httpTimeoutSeconds  = 15
+	webSearchProxyURL   = "http://127.0.0.1:7890"
 )
 
 // WebSearchTool searches the web, preferring DuckDuckGo and falling back to
@@ -30,10 +31,20 @@ type WebSearchTool struct {
 
 // NewWebSearchTool creates a new WebSearchTool using the provided config.
 func NewWebSearchTool(cfg config.WebSearchConfig) *WebSearchTool {
+	proxyURL, err := url.Parse(webSearchProxyURL)
+	proxyFunc := http.ProxyFromEnvironment
+	if err == nil {
+		proxyFunc = http.ProxyURL(proxyURL)
+	}
+
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = proxyFunc
+
 	return &WebSearchTool{
 		cfg: cfg,
 		httpClient: &http.Client{
-			Timeout: httpTimeoutSeconds * time.Second,
+			Timeout:   httpTimeoutSeconds * time.Second,
+			Transport: transport,
 		},
 	}
 }

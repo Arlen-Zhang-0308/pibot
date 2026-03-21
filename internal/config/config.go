@@ -11,14 +11,14 @@ import (
 
 // Config holds all application configuration
 type Config struct {
-	Server     ServerConfig      `yaml:"server"`
-	AI         AIConfig          `yaml:"ai"`
-	Executor   ExecutorConfig    `yaml:"executor"`
-	FileOps    FileOpsConfig     `yaml:"fileops"`
-	Prompts    PromptsConfig     `yaml:"prompts"`
-	WebSearch  WebSearchConfig   `yaml:"web_search"`
-	SkillsPath string            `yaml:"skills_path"`
-	Reboot     RebootConfig      `yaml:"reboot"`
+	Server     ServerConfig    `yaml:"server"`
+	AI         AIConfig        `yaml:"ai"`
+	Executor   ExecutorConfig  `yaml:"executor"`
+	FileOps    FileOpsConfig   `yaml:"fileops"`
+	Prompts    PromptsConfig   `yaml:"prompts"`
+	WebSearch  WebSearchConfig `yaml:"web_search"`
+	SkillsPath string          `yaml:"skills_path"`
+	Reboot     RebootConfig    `yaml:"reboot"`
 	// Env holds environment variables that are injected into the process
 	// environment at server startup. Each key-value pair is set via os.Setenv.
 	Env        map[string]string `yaml:"env,omitempty"`
@@ -113,6 +113,8 @@ type ExecutorConfig struct {
 	ModerateCommands  []string `yaml:"moderate_commands"`
 	DangerousCommands []string `yaml:"dangerous_commands"`
 	BlockedCommands   []string `yaml:"blocked_commands"`
+	// ProxyCommands lists command names that should run with proxy env injected.
+	ProxyCommands []string `yaml:"proxy_commands"`
 }
 
 // FileOpsConfig holds file operation settings
@@ -164,6 +166,7 @@ func DefaultConfig() *Config {
 			ModerateCommands:  []string{"mkdir", "cp", "mv", "touch", "chmod", "chown", "tar", "gzip", "gunzip", "zip", "unzip", "wget", "curl"},
 			DangerousCommands: []string{"rm", "sudo", "apt", "yum", "dnf", "pacman", "pip", "npm", "go", "make", "systemctl", "service", "reboot", "shutdown", "kill", "pkill"},
 			BlockedCommands:   []string{"dd", "mkfs", "fdisk", "parted", "format", ":(){:|:&};:"},
+			ProxyCommands:     []string{},
 		},
 		FileOps: FileOpsConfig{
 			BaseDirectory: filepath.Join(homeDir, "pibot-workspace"),

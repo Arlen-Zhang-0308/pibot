@@ -77,6 +77,11 @@ executor:
         - parted
         - format
         - ':(){:|:&};:'
+    # Commands that should run with built-in proxy env values injected.
+    # Match is based on the base command name (first executable token).
+    proxy_commands:
+        - git
+        - curl
 fileops:
     base_directory: ~/pibot-workspace
     allowed_paths: []
