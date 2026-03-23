@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/pibot/pibot/internal/capabilities"
@@ -15,11 +17,31 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 )
 
-// MaxToolIterations limits the number of tool call iterations to prevent infinite loops
-const MaxToolIterations = 50
+// staleThreshold is the number of consecutive identical tool-call rounds
+// before the agent concludes it is stuck and stops the loop.
+const staleThreshold = 3
 
-// MaxPromptToolIterations limits iterations for prompt-based tools
-const MaxPromptToolIterations = 5
+// toolCallSignature returns a deterministic string representation of a set of
+// tool calls so that consecutive identical rounds can be detected.
+func toolCallSignature(calls []openai.ToolCall) string {
+	parts := make([]string, len(calls))
+	for i, tc := range calls {
+		parts[i] = tc.Function.Name + ":" + tc.Function.Arguments
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, "|")
+}
+
+// actionSignature returns a deterministic fingerprint for a set of parsed
+// prompt-based actions so we can detect repeated identical rounds.
+func actionSignature(actions []ActionBlock) string {
+	parts := make([]string, len(actions))
+	for i, a := range actions {
+		parts[i] = fmt.Sprintf("%s:%s", a.Type, a.RawContent)
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, "|")
+}
 
 // ChatSession handles a chat conversation with tool support
 type ChatSession struct {
@@ -154,10 +176,15 @@ func (s *ChatSession) chatWithPromptBasedTools(ctx context.Context, providerName
 	messages = s.prepareMessagesWithPromptTools(messages)
 
 	var fullResponse strings.Builder
+	var lastSig string
+	staleCount := 0
 
-	// Tool execution loop
-	for iteration := 0; iteration < MaxPromptToolIterations; iteration++ {
-		log.Printf("[ai] prompt-based tool loop iteration=%d provider=%s", iteration+1, providerName)
+	for iteration := 1; ; iteration++ {
+		if ctx.Err() != nil {
+			return fullResponse.String(), nil
+		}
+
+		log.Printf("[ai] prompt-based tool loop iteration=%d provider=%s", iteration, providerName)
 
 		response, err := provider.Chat(ctx, messages)
 		if err != nil {
@@ -169,11 +196,24 @@ func (s *ChatSession) chatWithPromptBasedTools(ctx context.Context, providerName
 
 		actions := ParseActions(response)
 		if len(actions) == 0 {
-			log.Printf("[ai] no actions in response, done (iteration=%d)", iteration+1)
+			log.Printf("[ai] no actions in response, done (iteration=%d)", iteration)
 			return fullResponse.String(), nil
 		}
 
-		log.Printf("[ai] AI requested %d action(s) (iteration=%d)", len(actions), iteration+1)
+		log.Printf("[ai] AI requested %d action(s) (iteration=%d)", len(actions), iteration)
+
+		sig := actionSignature(actions)
+		if sig == lastSig {
+			staleCount++
+		} else {
+			staleCount = 0
+		}
+		lastSig = sig
+
+		if staleCount >= staleThreshold {
+			log.Printf("[ai] prompt-based tool loop: %d identical consecutive rounds detected, stopping (iteration=%d)", staleThreshold, iteration)
+			return fullResponse.String(), errors.New("agent appears stuck: repeated identical tool calls")
+		}
 
 		var resultBuilder strings.Builder
 		for _, action := range actions {
@@ -190,7 +230,6 @@ func (s *ChatSession) chatWithPromptBasedTools(ctx context.Context, providerName
 		resultsText := resultBuilder.String()
 		fullResponse.WriteString(resultsText)
 
-		// Add assistant response and results to messages for next iteration
 		messages = append(messages, Message{
 			Role:    RoleAssistant,
 			Content: response,
@@ -200,8 +239,6 @@ func (s *ChatSession) chatWithPromptBasedTools(ctx context.Context, providerName
 			Content: "Here are the results of your actions:\n" + resultsText + "\n\nPlease provide your response to the user based on these results.",
 		})
 	}
-
-	return fullResponse.String(), nil
 }
 
 // supportsNativeTools checks if a provider supports native OpenAI-style tools
@@ -251,9 +288,15 @@ func (s *ChatSession) chatWithNativeTools(ctx context.Context, providerName stri
 		return "", errors.New("unsupported provider for native tools")
 	}
 
-	// Tool calling loop
-	for iteration := 0; iteration < MaxToolIterations; iteration++ {
-		log.Printf("[ai] native tool loop iteration=%d provider=%s", iteration+1, providerName)
+	var lastSig string
+	staleCount := 0
+
+	for iteration := 1; ; iteration++ {
+		if ctx.Err() != nil {
+			return "", nil
+		}
+
+		log.Printf("[ai] native tool loop iteration=%d provider=%s", iteration, providerName)
 
 		resp, err := client.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
 			Model:    model,
@@ -275,11 +318,24 @@ func (s *ChatSession) chatWithNativeTools(ctx context.Context, providerName stri
 		openaiMessages = append(openaiMessages, assistantMsg)
 
 		if len(assistantMsg.ToolCalls) == 0 {
-			log.Printf("[ai] no tool calls in response, done (iteration=%d)", iteration+1)
+			log.Printf("[ai] no tool calls in response, done (iteration=%d)", iteration)
 			return assistantMsg.Content, nil
 		}
 
-		log.Printf("[ai] AI requested %d tool call(s)", len(assistantMsg.ToolCalls))
+		log.Printf("[ai] AI requested %d tool call(s) (iteration=%d)", len(assistantMsg.ToolCalls), iteration)
+
+		sig := toolCallSignature(assistantMsg.ToolCalls)
+		if sig == lastSig {
+			staleCount++
+		} else {
+			staleCount = 0
+		}
+		lastSig = sig
+
+		if staleCount >= staleThreshold {
+			log.Printf("[ai] native tool loop: %d identical consecutive rounds detected, stopping (iteration=%d)", staleThreshold, iteration)
+			return "", errors.New("agent appears stuck: repeated identical tool calls")
+		}
 
 		for _, toolCall := range assistantMsg.ToolCalls {
 			log.Printf("[ai] tool call: name=%s id=%s args=%s", toolCall.Function.Name, toolCall.ID, toolCall.Function.Arguments)
@@ -301,9 +357,6 @@ func (s *ChatSession) chatWithNativeTools(ctx context.Context, providerName stri
 			})
 		}
 	}
-
-	log.Printf("[ai] ERROR: reached maximum tool iterations (%d)", MaxToolIterations)
-	return "", errors.New("maximum tool iterations reached")
 }
 
 // StreamChatWithTools streams a chat response with tool support
@@ -359,14 +412,15 @@ func (s *ChatSession) streamChatWithNativeTools(ctx context.Context, providerNam
 		return errors.New("unsupported provider for native tools")
 	}
 
-	// Tool calling loop with streaming
-	for iteration := 0; iteration < MaxToolIterations; iteration++ {
-		// Check for cancellation at the top of each iteration.
+	var lastSig string
+	staleCount := 0
+
+	for iteration := 1; ; iteration++ {
 		if ctx.Err() != nil {
 			return nil
 		}
 
-		log.Printf("[ai] stream native tool loop iteration=%d provider=%s", iteration+1, providerName)
+		log.Printf("[ai] stream native tool loop iteration=%d provider=%s", iteration, providerName)
 
 		stream, err := client.CreateChatCompletionStream(ctx, openai.ChatCompletionRequest{
 			Model:    model,
@@ -383,7 +437,6 @@ func (s *ChatSession) streamChatWithNativeTools(ctx context.Context, providerNam
 		var toolCalls []openai.ToolCall
 		toolCallsMap := make(map[int]*openai.ToolCall)
 
-		// Stream the response
 		for {
 			response, err := stream.Recv()
 			if errors.Is(err, io.EOF) {
@@ -391,7 +444,6 @@ func (s *ChatSession) streamChatWithNativeTools(ctx context.Context, providerNam
 			}
 			if err != nil {
 				stream.Close()
-				// Treat context cancellation (abort) as a clean stop.
 				if ctx.Err() != nil {
 					return nil
 				}
@@ -401,7 +453,6 @@ func (s *ChatSession) streamChatWithNativeTools(ctx context.Context, providerNam
 			if len(response.Choices) > 0 {
 				delta := response.Choices[0].Delta
 
-				// Stream content chunks
 				if delta.Content != "" {
 					select {
 					case ch <- delta.Content:
@@ -412,7 +463,6 @@ func (s *ChatSession) streamChatWithNativeTools(ctx context.Context, providerNam
 					contentBuilder.WriteString(delta.Content)
 				}
 
-				// Accumulate tool calls
 				for _, tc := range delta.ToolCalls {
 					idx := 0
 					if tc.Index != nil {
@@ -429,7 +479,6 @@ func (s *ChatSession) streamChatWithNativeTools(ctx context.Context, providerNam
 							},
 						}
 					} else {
-						// Append to existing tool call
 						if tc.ID != "" {
 							toolCallsMap[idx].ID = tc.ID
 						}
@@ -443,17 +492,14 @@ func (s *ChatSession) streamChatWithNativeTools(ctx context.Context, providerNam
 		}
 		stream.Close()
 
-		// If aborted while the stream was draining, stop before executing any tool calls.
 		if ctx.Err() != nil {
 			return nil
 		}
 
-		// Convert map to slice
 		for _, tc := range toolCallsMap {
 			toolCalls = append(toolCalls, *tc)
 		}
 
-		// Add assistant message to history
 		assistantMsg := openai.ChatCompletionMessage{
 			Role:      openai.ChatMessageRoleAssistant,
 			Content:   contentBuilder.String(),
@@ -462,11 +508,24 @@ func (s *ChatSession) streamChatWithNativeTools(ctx context.Context, providerNam
 		openaiMessages = append(openaiMessages, assistantMsg)
 
 		if len(toolCalls) == 0 {
-			log.Printf("[ai] stream: no tool calls, done (iteration=%d)", iteration+1)
+			log.Printf("[ai] stream: no tool calls, done (iteration=%d)", iteration)
 			return nil
 		}
 
-		log.Printf("[ai] stream: AI requested %d tool call(s)", len(toolCalls))
+		log.Printf("[ai] stream: AI requested %d tool call(s) (iteration=%d)", len(toolCalls), iteration)
+
+		sig := toolCallSignature(toolCalls)
+		if sig == lastSig {
+			staleCount++
+		} else {
+			staleCount = 0
+		}
+		lastSig = sig
+
+		if staleCount >= staleThreshold {
+			log.Printf("[ai] stream native tool loop: %d identical consecutive rounds detected, stopping (iteration=%d)", staleThreshold, iteration)
+			return errors.New("agent appears stuck: repeated identical tool calls")
+		}
 
 		for _, toolCall := range toolCalls {
 			log.Printf("[ai] stream tool call: name=%s id=%s args=%s", toolCall.Function.Name, toolCall.ID, toolCall.Function.Arguments)
@@ -488,9 +547,6 @@ func (s *ChatSession) streamChatWithNativeTools(ctx context.Context, providerNam
 			})
 		}
 	}
-
-	log.Printf("[ai] stream ERROR: reached maximum tool iterations (%d)", MaxToolIterations)
-	return errors.New("maximum tool iterations reached")
 }
 
 // streamChatWithPromptBasedTools handles streaming with prompt-based tool calling
@@ -503,21 +559,23 @@ func (s *ChatSession) streamChatWithPromptBasedTools(ctx context.Context, provid
 		return err
 	}
 
-	// Prepare messages with prompt-based tools system prompt
 	messages = s.prepareMessagesWithPromptTools(messages)
 
-	// Tool execution loop
-	for iteration := 0; iteration < MaxPromptToolIterations; iteration++ {
-		// Collect the full response
+	var lastSig string
+	staleCount := 0
+
+	for iteration := 1; ; iteration++ {
+		if ctx.Err() != nil {
+			return nil
+		}
+
 		responseCh := make(chan string, 100)
 		var responseBuilder strings.Builder
 
-		// Stream from provider
 		go func() {
 			provider.StreamChat(ctx, messages, responseCh)
 		}()
 
-		// Collect and forward chunks
 		for chunk := range responseCh {
 			responseBuilder.WriteString(chunk)
 			select {
@@ -532,14 +590,26 @@ func (s *ChatSession) streamChatWithPromptBasedTools(ctx context.Context, provid
 
 		fullResponse := responseBuilder.String()
 
-		// Check for action blocks in the response
 		actions := ParseActions(fullResponse)
 		if len(actions) == 0 {
-			// No actions, we're done
 			return nil
 		}
 
-		// Execute actions and collect results
+		log.Printf("[ai] stream prompt-based: AI requested %d action(s) (iteration=%d)", len(actions), iteration)
+
+		sig := actionSignature(actions)
+		if sig == lastSig {
+			staleCount++
+		} else {
+			staleCount = 0
+		}
+		lastSig = sig
+
+		if staleCount >= staleThreshold {
+			log.Printf("[ai] stream prompt-based tool loop: %d identical consecutive rounds detected, stopping (iteration=%d)", staleThreshold, iteration)
+			return errors.New("agent appears stuck: repeated identical tool calls")
+		}
+
 		var resultBuilder strings.Builder
 		for _, action := range actions {
 			result, err := ExecuteAction(ctx, s.registry, action)
@@ -550,11 +620,9 @@ func (s *ChatSession) streamChatWithPromptBasedTools(ctx context.Context, provid
 			}
 		}
 
-		// Send the results to the channel
 		resultsText := resultBuilder.String()
 		ch <- resultsText
 
-		// Add assistant response and results to messages for next iteration
 		messages = append(messages, Message{
 			Role:    RoleAssistant,
 			Content: fullResponse,
@@ -564,8 +632,6 @@ func (s *ChatSession) streamChatWithPromptBasedTools(ctx context.Context, provid
 			Content: "Here are the results of your actions:\n" + resultsText + "\n\nPlease provide your response to the user based on these results.",
 		})
 	}
-
-	return errors.New("maximum prompt-based tool iterations reached")
 }
 
 // prepareMessagesWithPromptTools prepares messages with the prompt-based tools system prompt
