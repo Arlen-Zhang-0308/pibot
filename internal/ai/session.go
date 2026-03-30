@@ -21,6 +21,33 @@ import (
 // before the agent concludes it is stuck and stops the loop.
 const staleThreshold = 3
 
+// contextKey is an unexported type for context keys in this package.
+type contextKey int
+
+const (
+	// ToolEventKey holds a func(ToolEvent) callback for notifying about tool
+	// execution lifecycle events (start, output, finish).
+	ToolEventKey contextKey = iota
+)
+
+// ToolEventKind distinguishes different tool lifecycle events.
+type ToolEventKind string
+
+const (
+	ToolEventExecuting ToolEventKind = "executing"
+	ToolEventOutput    ToolEventKind = "output"
+	ToolEventFinished  ToolEventKind = "finished"
+)
+
+// ToolEvent carries information about a tool execution lifecycle event.
+type ToolEvent struct {
+	Kind    ToolEventKind `json:"kind"`
+	Tool    string        `json:"tool"`
+	Args    string        `json:"args,omitempty"`
+	Content string        `json:"content,omitempty"`
+	IsError bool          `json:"is_error,omitempty"`
+}
+
 // toolCallSignature returns a deterministic string representation of a set of
 // tool calls so that consecutive identical rounds can be detected.
 func toolCallSignature(calls []openai.ToolCall) string {
@@ -143,6 +170,36 @@ func (s *ChatSession) convertToolDefinitions() []openai.Tool {
 	return tools
 }
 
+// emitToolEvent sends a ToolEvent if a callback is registered in ctx.
+func emitToolEvent(ctx context.Context, evt ToolEvent) {
+	if fn, ok := ctx.Value(ToolEventKey).(func(ToolEvent)); ok && fn != nil {
+		fn(evt)
+	}
+}
+
+// convertToOpenAIMessage converts an internal Message to an openai.ChatCompletionMessage,
+// ensuring the "content" field is always present in the serialized JSON.
+func convertToOpenAIMessage(msg Message) openai.ChatCompletionMessage {
+	return openai.ChatCompletionMessage{
+		Role:    string(msg.Role),
+		Content: msg.Content,
+	}
+}
+
+// ensureContentPresent guarantees the "content" field will be serialized in JSON.
+// The go-openai library tags Content with `json:"content,omitempty"`, which
+// drops empty strings during marshalling. Some OpenAI-compatible APIs (e.g.
+// DashScope / Qwen) reject messages that lack a content field entirely.
+// We use MultiContent with a single text part so the library's custom
+// MarshalJSON always emits the "content" key (as an array).
+func ensureContentPresent(m *openai.ChatCompletionMessage) {
+	if m.Content == "" && m.MultiContent == nil {
+		m.MultiContent = []openai.ChatMessagePart{
+			{Type: openai.ChatMessagePartTypeText, Text: ""},
+		}
+	}
+}
+
 // resolveProvider returns the given provider name, falling back to the configured
 // default when the name is empty.
 func (s *ChatSession) resolveProvider(providerName string) string {
@@ -218,11 +275,29 @@ func (s *ChatSession) chatWithPromptBasedTools(ctx context.Context, providerName
 		var resultBuilder strings.Builder
 		for _, action := range actions {
 			log.Printf("[ai] executing action: %s", action.Type)
+
+			emitToolEvent(ctx, ToolEvent{
+				Kind: ToolEventExecuting,
+				Tool: action.Type,
+				Args: action.RawContent,
+			})
+
 			result, err := ExecuteAction(ctx, s.registry, action)
 			if err != nil {
 				log.Printf("[ai] action %q ERROR: %v", action.Type, err)
+				emitToolEvent(ctx, ToolEvent{
+					Kind:    ToolEventFinished,
+					Tool:    action.Type,
+					Content: "Error: " + err.Error(),
+					IsError: true,
+				})
 				resultBuilder.WriteString(FormatActionResult(action, "Error: "+err.Error(), true))
 			} else {
+				emitToolEvent(ctx, ToolEvent{
+					Kind:    ToolEventFinished,
+					Tool:    action.Type,
+					Content: result,
+				})
 				resultBuilder.WriteString(FormatActionResult(action, result, false))
 			}
 		}
@@ -259,10 +334,7 @@ func (s *ChatSession) chatWithNativeTools(ctx context.Context, providerName stri
 	// Convert messages to OpenAI format
 	openaiMessages := make([]openai.ChatCompletionMessage, len(messages))
 	for i, msg := range messages {
-		openaiMessages[i] = openai.ChatCompletionMessage{
-			Role:    string(msg.Role),
-			Content: msg.Content,
-		}
+		openaiMessages[i] = convertToOpenAIMessage(msg)
 	}
 
 	// Get the appropriate client
@@ -314,6 +386,7 @@ func (s *ChatSession) chatWithNativeTools(ctx context.Context, providerName stri
 
 		choice := resp.Choices[0]
 		assistantMsg := choice.Message
+		ensureContentPresent(&assistantMsg)
 
 		openaiMessages = append(openaiMessages, assistantMsg)
 
@@ -339,6 +412,13 @@ func (s *ChatSession) chatWithNativeTools(ctx context.Context, providerName stri
 
 		for _, toolCall := range assistantMsg.ToolCalls {
 			log.Printf("[ai] tool call: name=%s id=%s args=%s", toolCall.Function.Name, toolCall.ID, toolCall.Function.Arguments)
+
+			emitToolEvent(ctx, ToolEvent{
+				Kind: ToolEventExecuting,
+				Tool: toolCall.Function.Name,
+				Args: toolCall.Function.Arguments,
+			})
+
 			call := capabilities.ToolCall{
 				ID:        toolCall.ID,
 				Name:      toolCall.Function.Name,
@@ -350,11 +430,20 @@ func (s *ChatSession) chatWithNativeTools(ctx context.Context, providerName stri
 				log.Printf("[ai] tool call %q returned error: %s", toolCall.Function.Name, result.Content)
 			}
 
-			openaiMessages = append(openaiMessages, openai.ChatCompletionMessage{
+			emitToolEvent(ctx, ToolEvent{
+				Kind:    ToolEventFinished,
+				Tool:    toolCall.Function.Name,
+				Content: result.Content,
+				IsError: result.IsError,
+			})
+
+			toolMsg := openai.ChatCompletionMessage{
 				Role:       openai.ChatMessageRoleTool,
 				Content:    result.Content,
 				ToolCallID: toolCall.ID,
-			})
+			}
+			ensureContentPresent(&toolMsg)
+			openaiMessages = append(openaiMessages, toolMsg)
 		}
 	}
 }
@@ -383,10 +472,7 @@ func (s *ChatSession) streamChatWithNativeTools(ctx context.Context, providerNam
 	// Convert messages to OpenAI format
 	openaiMessages := make([]openai.ChatCompletionMessage, len(messages))
 	for i, msg := range messages {
-		openaiMessages[i] = openai.ChatCompletionMessage{
-			Role:    string(msg.Role),
-			Content: msg.Content,
-		}
+		openaiMessages[i] = convertToOpenAIMessage(msg)
 	}
 
 	// Get the appropriate client
@@ -505,6 +591,7 @@ func (s *ChatSession) streamChatWithNativeTools(ctx context.Context, providerNam
 			Content:   contentBuilder.String(),
 			ToolCalls: toolCalls,
 		}
+		ensureContentPresent(&assistantMsg)
 		openaiMessages = append(openaiMessages, assistantMsg)
 
 		if len(toolCalls) == 0 {
@@ -529,6 +616,13 @@ func (s *ChatSession) streamChatWithNativeTools(ctx context.Context, providerNam
 
 		for _, toolCall := range toolCalls {
 			log.Printf("[ai] stream tool call: name=%s id=%s args=%s", toolCall.Function.Name, toolCall.ID, toolCall.Function.Arguments)
+
+			emitToolEvent(ctx, ToolEvent{
+				Kind: ToolEventExecuting,
+				Tool: toolCall.Function.Name,
+				Args: toolCall.Function.Arguments,
+			})
+
 			call := capabilities.ToolCall{
 				ID:        toolCall.ID,
 				Name:      toolCall.Function.Name,
@@ -540,11 +634,20 @@ func (s *ChatSession) streamChatWithNativeTools(ctx context.Context, providerNam
 				log.Printf("[ai] stream tool call %q returned error: %s", toolCall.Function.Name, result.Content)
 			}
 
-			openaiMessages = append(openaiMessages, openai.ChatCompletionMessage{
+			emitToolEvent(ctx, ToolEvent{
+				Kind:    ToolEventFinished,
+				Tool:    toolCall.Function.Name,
+				Content: result.Content,
+				IsError: result.IsError,
+			})
+
+			toolMsg := openai.ChatCompletionMessage{
 				Role:       openai.ChatMessageRoleTool,
 				Content:    result.Content,
 				ToolCallID: toolCall.ID,
-			})
+			}
+			ensureContentPresent(&toolMsg)
+			openaiMessages = append(openaiMessages, toolMsg)
 		}
 	}
 }
@@ -612,10 +715,27 @@ func (s *ChatSession) streamChatWithPromptBasedTools(ctx context.Context, provid
 
 		var resultBuilder strings.Builder
 		for _, action := range actions {
+			emitToolEvent(ctx, ToolEvent{
+				Kind: ToolEventExecuting,
+				Tool: action.Type,
+				Args: action.RawContent,
+			})
+
 			result, err := ExecuteAction(ctx, s.registry, action)
 			if err != nil {
+				emitToolEvent(ctx, ToolEvent{
+					Kind:    ToolEventFinished,
+					Tool:    action.Type,
+					Content: "Error: " + err.Error(),
+					IsError: true,
+				})
 				resultBuilder.WriteString(FormatActionResult(action, "Error: "+err.Error(), true))
 			} else {
+				emitToolEvent(ctx, ToolEvent{
+					Kind:    ToolEventFinished,
+					Tool:    action.Type,
+					Content: result,
+				})
 				resultBuilder.WriteString(FormatActionResult(action, result, false))
 			}
 		}

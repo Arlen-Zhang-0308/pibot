@@ -1,10 +1,12 @@
 package executor
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -33,6 +35,8 @@ const (
 	AlwaysAllowKey contextKey = iota
 	// NotifyPendingKey holds a func(result *ExecutionResult) to push a pending WS message.
 	NotifyPendingKey
+	// OutputStreamKey holds a func(line string) to push real-time command output.
+	OutputStreamKey
 )
 
 // ExecutionResult represents the result of a command execution
@@ -227,7 +231,9 @@ func (e *Executor) CancelAll() {
 	}
 }
 
-// executeCommand actually runs the command
+// executeCommand actually runs the command.
+// If an OutputStreamKey callback is present in ctx, stdout/stderr are streamed
+// line-by-line via that callback in addition to being captured.
 func (e *Executor) executeCommand(ctx context.Context, command string, level CommandLevel) (*ExecutionResult, error) {
 	start := time.Now()
 
@@ -235,7 +241,7 @@ func (e *Executor) executeCommand(ctx context.Context, command string, level Com
 	defer cancel()
 
 	execCfg := e.config.GetExecutor()
-	cmdEnv := os.Environ() // explicitly inherit the full server environment
+	cmdEnv := os.Environ()
 	if commandNeedsProxy(command, execCfg.ProxyCommands) {
 		cmdEnv = mergeEnv(cmdEnv, proxyEnvOverrides())
 		log.Printf("[exec] proxy env injected for command: %s", command)
@@ -243,6 +249,12 @@ func (e *Executor) executeCommand(ctx context.Context, command string, level Com
 
 	cmd := exec.CommandContext(ctx, "bash", "-c", command)
 	cmd.Env = cmdEnv
+
+	streamFn, hasStream := ctx.Value(OutputStreamKey).(func(string))
+
+	if hasStream && streamFn != nil {
+		return e.executeCommandStreaming(ctx, cmd, command, level, start, streamFn)
+	}
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -267,6 +279,75 @@ func (e *Executor) executeCommand(ctx context.Context, command string, level Com
 			result.ExitCode = -1
 			if result.Error == "" {
 				result.Error = err.Error()
+			}
+		}
+		log.Printf("[exec] command FAILED (exit=%d, duration=%s): %s\n  stdout: %s\n  stderr: %s",
+			result.ExitCode, duration, command,
+			truncateLog(stdout.String(), 512),
+			truncateLog(result.Error, 512))
+	} else {
+		result.ExitCode = 0
+		log.Printf("[exec] command succeeded (exit=0, duration=%s): %s\n  stdout: %s",
+			duration, command, truncateLog(stdout.String(), 512))
+	}
+
+	return result, nil
+}
+
+// executeCommandStreaming runs the command with real-time line-by-line output
+// forwarded via streamFn. Both stdout and stderr are merged and streamed.
+func (e *Executor) executeCommandStreaming(ctx context.Context, cmd *exec.Cmd, command string, level CommandLevel, start time.Time, streamFn func(string)) (*ExecutionResult, error) {
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("stdout pipe: %w", err)
+	}
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, fmt.Errorf("stderr pipe: %w", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("start command: %w", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	var wg sync.WaitGroup
+
+	scanAndStream := func(r io.Reader, buf *bytes.Buffer) {
+		defer wg.Done()
+		scanner := bufio.NewScanner(r)
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		for scanner.Scan() {
+			line := scanner.Text() + "\n"
+			buf.WriteString(line)
+			streamFn(line)
+		}
+	}
+
+	wg.Add(2)
+	go scanAndStream(stdoutPipe, &stdout)
+	go scanAndStream(stderrPipe, &stderr)
+
+	wg.Wait()
+	cmdErr := cmd.Wait()
+	duration := time.Since(start)
+
+	result := &ExecutionResult{
+		Command:  command,
+		Output:   stdout.String(),
+		Duration: duration.String(),
+		Level:    level.String(),
+		Pending:  false,
+	}
+
+	if cmdErr != nil {
+		result.Error = stderr.String()
+		if exitErr, ok := cmdErr.(*exec.ExitError); ok {
+			result.ExitCode = exitErr.ExitCode()
+		} else {
+			result.ExitCode = -1
+			if result.Error == "" {
+				result.Error = cmdErr.Error()
 			}
 		}
 		log.Printf("[exec] command FAILED (exit=%d, duration=%s): %s\n  stdout: %s\n  stderr: %s",

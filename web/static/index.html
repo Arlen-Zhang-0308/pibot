@@ -156,8 +156,34 @@
                                     </svg>
                                 </div>
                                 <div class="message-content">
+                                    <!-- Tool execution blocks -->
+                                    <div v-if="msg.toolBlocks && msg.toolBlocks.length > 0" class="tool-blocks">
+                                        <div
+                                            v-for="(tb, ti) in msg.toolBlocks"
+                                            :key="ti"
+                                            class="tool-block"
+                                            :class="{ running: tb.status === 'running', done: tb.status === 'done', error: tb.status === 'error' }"
+                                        >
+                                            <div class="tool-block-header" @click="tb.collapsed = !tb.collapsed">
+                                                <span class="tool-block-indicator">
+                                                    <span v-if="tb.status === 'running'" class="tool-spinner"></span>
+                                                    <svg v-else-if="tb.status === 'done'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                                                    <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                                                </span>
+                                                <span class="tool-block-name">{{ tb.tool }}</span>
+                                                <code class="tool-block-args" v-if="tb.args">{{ tb.args.length > 80 ? tb.args.substring(0, 80) + '…' : tb.args }}</code>
+                                                <span class="tool-block-chevron" :class="{ open: !tb.collapsed }">
+                                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+                                                </span>
+                                            </div>
+                                            <div v-show="!tb.collapsed" class="tool-block-body">
+                                                <pre class="tool-block-output">{{ tb.output || (tb.status === 'running' ? 'Executing…' : '(no output)') }}</pre>
+                                            </div>
+                                        </div>
+                                    </div>
                                     <p class="message-text" v-html="renderMarkdown(msg.content)"></p>
-                                    <span class="loading-dots" v-if="msg.role === 'assistant' && msg.loading">Thinking</span>
+                                    <span class="loading-dots" v-if="msg.role === 'assistant' && msg.loading && (!msg.toolBlocks || msg.toolBlocks.length === 0)">Thinking</span>
+                                    <span class="loading-dots" v-if="msg.role === 'assistant' && msg.loading && msg.toolBlocks && msg.toolBlocks.length > 0 && msg.toolBlocks.every(b => b.status !== 'running')">Thinking</span>
                                 </div>
                             </div>
                         </div>

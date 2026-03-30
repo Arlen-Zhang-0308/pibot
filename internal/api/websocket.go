@@ -13,6 +13,14 @@ import (
 	"github.com/pibot/pibot/internal/executor"
 )
 
+// toolExecPayload is a lightweight struct for marshalling tool-event WS messages.
+type toolExecPayload struct {
+	Tool    string `json:"tool"`
+	Args    string `json:"args,omitempty"`
+	Content string `json:"content,omitempty"`
+	IsError bool   `json:"is_error,omitempty"`
+}
+
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
@@ -23,15 +31,18 @@ var upgrader = websocket.Upgrader{
 
 // WebSocket message types
 const (
-	MsgTypeChat       = "chat"
-	MsgTypeExec       = "exec"
-	MsgTypeAbort      = "abort"
-	MsgTypeAbortAck   = "abort_ack"
-	MsgTypeStream     = "stream"
-	MsgTypeStreamEnd  = "stream_end"
-	MsgTypeExecResult = "exec_result"
-	MsgTypeError      = "error"
-	MsgTypePending    = "pending"
+	MsgTypeChat          = "chat"
+	MsgTypeExec          = "exec"
+	MsgTypeAbort         = "abort"
+	MsgTypeAbortAck      = "abort_ack"
+	MsgTypeStream        = "stream"
+	MsgTypeStreamEnd     = "stream_end"
+	MsgTypeExecResult    = "exec_result"
+	MsgTypeError         = "error"
+	MsgTypePending       = "pending"
+	MsgTypeToolExecuting = "tool_executing"
+	MsgTypeToolOutput    = "tool_output"
+	MsgTypeToolFinished  = "tool_finished"
 )
 
 // WSMessage represents a WebSocket message
@@ -261,6 +272,46 @@ func (c *Client) handleChatMessage(msg WSMessage) {
 		})
 	}
 	ctx = context.WithValue(ctx, executor.NotifyPendingKey, notifyFn)
+
+	// Inject a real-time output stream callback so command stdout/stderr
+	// lines are pushed to the client as they are produced.
+	outputStreamFn := func(line string) {
+		c.sendMessage(WSMessage{
+			Type: MsgTypeToolOutput,
+			ID:   msg.ID,
+			Payload: mustMarshal(toolExecPayload{
+				Content: line,
+			}),
+		})
+	}
+	ctx = context.WithValue(ctx, executor.OutputStreamKey, outputStreamFn)
+
+	// Inject a tool-event callback so the client is notified when tools
+	// start executing and when they finish.
+	toolEventFn := func(evt ai.ToolEvent) {
+		var msgType string
+		switch evt.Kind {
+		case ai.ToolEventExecuting:
+			msgType = MsgTypeToolExecuting
+		case ai.ToolEventOutput:
+			msgType = MsgTypeToolOutput
+		case ai.ToolEventFinished:
+			msgType = MsgTypeToolFinished
+		default:
+			return
+		}
+		c.sendMessage(WSMessage{
+			Type: msgType,
+			ID:   msg.ID,
+			Payload: mustMarshal(toolExecPayload{
+				Tool:    evt.Tool,
+				Args:    evt.Args,
+				Content: evt.Content,
+				IsError: evt.IsError,
+			}),
+		})
+	}
+	ctx = context.WithValue(ctx, ai.ToolEventKey, toolEventFn)
 
 	// Determine provider
 	provider := payload.Provider

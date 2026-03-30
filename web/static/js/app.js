@@ -61,6 +61,15 @@ createApp({
                 case 'abort_ack':
                     pendingQueue.value = [];
                     break;
+                case 'tool_executing':
+                    handleToolExecuting(msg.id, msg.payload);
+                    break;
+                case 'tool_output':
+                    handleToolOutput(msg.id, msg.payload);
+                    break;
+                case 'tool_finished':
+                    handleToolFinished(msg.id, msg.payload);
+                    break;
                 case 'error':
                     console.error('Server error:', msg.payload.error);
                     break;
@@ -156,6 +165,60 @@ createApp({
                 currentStreamId = null;
                 isStreaming.value = false;
             }
+        }
+
+        // ── Tool execution tracking ────────────────────────────────────
+        // Each assistant message can have an array of toolBlocks showing
+        // active or completed tool invocations.
+        function ensureToolBlocks(id) {
+            const msg = messages.value.find(m => m.id === id);
+            if (msg && !msg.toolBlocks) msg.toolBlocks = [];
+            return msg;
+        }
+
+        function handleToolExecuting(id, payload) {
+            const msg = ensureToolBlocks(id);
+            if (!msg) return;
+            let args = payload.args || '';
+            if (args) {
+                try {
+                    const parsed = JSON.parse(args);
+                    if (parsed.command) args = parsed.command;
+                    else if (parsed.path) args = parsed.path;
+                    else args = JSON.stringify(parsed, null, 2);
+                } catch (_) { /* keep raw */ }
+            }
+            msg.toolBlocks.push({
+                tool: payload.tool,
+                args: args,
+                output: '',
+                status: 'running',
+                isError: false,
+                collapsed: false,
+            });
+            scrollChatToBottom();
+        }
+
+        function handleToolOutput(id, payload) {
+            const msg = ensureToolBlocks(id);
+            if (!msg || msg.toolBlocks.length === 0) return;
+            const current = msg.toolBlocks[msg.toolBlocks.length - 1];
+            if (current.status === 'running') {
+                current.output += payload.content || '';
+                scrollChatToBottom();
+            }
+        }
+
+        function handleToolFinished(id, payload) {
+            const msg = ensureToolBlocks(id);
+            if (!msg || msg.toolBlocks.length === 0) return;
+            const current = msg.toolBlocks[msg.toolBlocks.length - 1];
+            current.status = payload.is_error ? 'error' : 'done';
+            current.isError = payload.is_error || false;
+            if (!current.output && payload.content) {
+                current.output = payload.content;
+            }
+            scrollChatToBottom();
         }
 
         // Simple markdown rendering: code blocks, inline code, bold, italic, line breaks
